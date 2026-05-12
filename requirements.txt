@@ -1,0 +1,29 @@
+# --- Core Web Framework ---
+Flask==3.0.0
+Flask-SQLAlchemy>=3.1.1
+python-dotenv>=1.0.0
+
+# --- Production WSGI Server ---
+waitress>=3.0.0
+
+# --- DICOM & Medical Imaging ---
+pydicom==2.4.0
+pynetdicom==2.0.0
+
+# --- Advanced DICOM Image Compression/Pixel Handlers ---
+pylibjpeg>=1.4.0
+pylibjpeg-libjpeg>=1.3.2
+pylibjpeg-openjpeg>=1.3.1
+
+# --- File System & Networking ---
+watchdog==3.0.0
+requests>=2.31.0
+psutil>=5.9.5
+aiofiles>=23.2.1
+httpx>=0.25.0
+
+# --- Logging ---
+python-json-logger>=2.0.7
+concurrent-log-handler>=0.9.24
+#gui
+pywebview>=4.4.1

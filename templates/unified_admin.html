@@ -1,0 +1,1021 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Node Control Panel</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #f0f4f8;
+            margin: 0;
+            color: #2d3748;
+        }
+
+        .top-nav {
+            background: #0f172a;
+            color: white;
+            padding: 15px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .top-nav a {
+            color: #cbd5e1;
+            text-decoration: none;
+            font-weight: bold;
+            margin-left: 20px;
+        }
+
+        .top-nav a:hover {
+            color: white;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 30px auto;
+            padding: 0 20px;
+        }
+
+        /* TABS */
+        .tab-header {
+            display: flex;
+            border-bottom: 2px solid #e2e8f0;
+            margin-bottom: 20px;
+            overflow-x: auto;
+        }
+
+        .tab-btn {
+            padding: 12px 24px;
+            background: none;
+            border: none;
+            font-size: 16px;
+            font-weight: bold;
+            color: #718096;
+            cursor: pointer;
+            border-bottom: 3px solid transparent;
+            margin-bottom: -2px;
+            white-space: nowrap;
+        }
+
+        .tab-btn:hover {
+            color: #2b6cb0;
+        }
+
+        .tab-btn.active {
+            color: #2b6cb0;
+            border-bottom-color: #2b6cb0;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+            animation: fadeIn 0.3s;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+            }
+
+            to {
+                opacity: 1;
+            }
+        }
+
+        /* REUSABLE CARD STYLES */
+        .card {
+            background: white;
+            padding: 25px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+            margin-bottom: 20px;
+            border: 1px solid #e2e8f0;
+        }
+
+        h3 {
+            color: #1a202c;
+            margin-top: 0;
+            border-bottom: 1px solid #e2e8f0;
+            padding-bottom: 10px;
+        }
+
+        /* FORMS & TABLES */
+        label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 5px;
+            font-size: 14px;
+            margin-top: 10px;
+        }
+
+        input[type="text"],
+        input[type="password"],
+        input[type="number"],
+        select {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 5px;
+            border: 1px solid #cbd5e1;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+
+        .btn {
+            background: #2563eb;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+
+        .btn:hover {
+            opacity: 0.9;
+        }
+
+        .btn-danger {
+            background: #dc2626;
+        }
+
+        .btn-success {
+            background: #16a34a;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+
+        th {
+            background: #f8fafc;
+            padding: 12px;
+            text-align: left;
+            font-size: 14px;
+            border-bottom: 2px solid #e2e8f0;
+        }
+
+        td {
+            padding: 12px;
+            border-bottom: 1px solid #e2e8f0;
+            font-size: 14px;
+        }
+
+        .flash {
+            padding: 12px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+
+        .success {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .error {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        /* BADGES */
+        .badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+
+        .bg-primary {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="top-nav">
+        <h2 style="margin:0;">⚙️ Edge Node Control Panel</h2>
+        <div>
+            <a href="/">← Back to Dashboard</a>
+            <a href="/admin-logout" style="color: #fca5a5;">Lock System 🔒</a>
+        </div>
+    </div>
+
+    <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        {% for category, message in messages %}
+        <div class="flash {{ category }}">{{ message }}</div>
+        {% endfor %}
+        {% endif %}
+        {% endwith %}
+
+        <div class="tab-header">
+            <button class="tab-btn active" onclick="openTab('security')">🛡️ Security & Cloud</button>
+            <button class="tab-btn" onclick="openTab('centers')">🏥 Center Routing</button>
+            <button class="tab-btn" onclick="openTab('mapping')">📖 Description Mapping</button>
+            <button class="tab-btn" onclick="openTab('zipper')">🗜️ Zipper Tuning</button>
+            <button class="tab-btn" onclick="openTab('compression')">Compression Tuning</button>
+            <button class="tab-btn" onclick="openTab('sys_config')">⚙️ System Configurations</button>
+        </div>
+
+        <div id="security" class="tab-content active">
+            <div class="card" style="border-left: 4px solid #2563eb; margin-bottom: 30px;">
+                <h3>☁️ Cloud API Connection</h3>
+
+                {% if has_creds %}
+                <div
+                    style="background: #f8fafc; padding: 15px; border-radius: 6px; margin-bottom: 15px; border: 1px solid #e2e8f0;">
+                    <span style="color: #166534; font-weight: bold;">✅ Node is Currently Linked</span><br>
+                    <span style="color: gray; font-size: 14px;">Authenticating as: <strong>{{ gateway_user.value
+                            }}</strong></span>
+                </div>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <form method="POST" action="/authenticate-gateway" style="margin: 0;">
+                        <button type="submit" class="btn btn-success" style="width: auto;">
+                            Authenticate & Start Pipeline
+                        </button>
+                    </form>
+
+                    <form method="POST" action="/settings" style="margin: 0;"
+                        onsubmit="return confirm('WARNING: Revoking credentials will immediately pause DICOM processing and cloud syncing. Are you sure?');">
+                        <input type="hidden" name="action" value="revoke_credentials">
+                        <button type="submit" class="btn btn-danger" style="width: auto;">Revoke Access</button>
+                    </form>
+                </div>
+                {% else %}
+                <div
+                    style="background: #fef2f2; padding: 15px; border-radius: 6px; margin-bottom: 15px; border: 1px solid #fecaca;">
+                    <span style="color: #991b1b; font-weight: bold;">⚠️ Node is Offline (No Credentials)</span><br>
+                    <span style="color: gray; font-size: 14px;">The DICOM receiver is paused. Link the node to begin
+                        processing.</span>
+                </div>
+                <form method="POST" action="/settings"
+                    style="display: grid; grid-template-columns: 1fr 1fr auto; gap: 15px; align-items: end;">
+                    <input type="hidden" name="action" value="save_credentials">
+                    <div>
+                        <label>API Username:</label>
+                        <input type="text" name="api_username" placeholder="e.g., node_01" style="margin:0;" required>
+                    </div>
+                    <div>
+                        <label>API Password:</label>
+                        <input type="password" name="api_password" placeholder="••••••••" style="margin:0;" required>
+                    </div>
+                    <button type="submit" class="btn">Save & Link</button>
+                </form>
+                {% endif %}
+            </div>
+
+            <div class="card" style="border-left: 4px solid #f59e0b; margin-bottom: 20px;">
+                <h3 style="margin-top: 0; border: none; padding-bottom: 0;">🛡️ DICOM Security Firewall</h3>
+                <form method="POST" action="/settings"
+                    style="display: flex; align-items: center; gap: 15px; margin-top: 15px;">
+                    <input type="hidden" name="action" value="toggle_security">
+                    <label style="margin: 0; font-size: 15px;">Strict AE Title & IP Filtering:</label>
+                    <select name="STRICT_AE_IP_CHECK" onchange="this.form.submit()"
+                        style="width: auto; margin: 0; font-weight: bold; color: #333; background-color: {% if sys_settings.get('STRICT_AE_IP_CHECK', 'true') == 'true' %}#dcfce7{% else %}#fee2e2{% endif %}; border: 1px solid #cbd5e1; border-radius: 4px; padding: 8px 12px; cursor: pointer;">
+                        <option value="true" {% if sys_settings.get('STRICT_AE_IP_CHECK', 'true' )=='true' %}selected{%
+                            endif %}>🟢 ENABLED (Secure)</option>
+                        <option value="false" {% if sys_settings.get('STRICT_AE_IP_CHECK', 'true' )=='false'
+                            %}selected{% endif %}>🔴 DISABLED (Allow All)</option>
+                    </select>
+                </form>
+                <p style="color: #64748b; font-size: 13px; margin-top: 10px; margin-bottom: 0;">
+                    If <strong>DISABLED</strong>, the gateway will instantly accept DICOM images from
+                    <strong>ANY</strong> scanner on the network, ignoring the VIP list below.
+                </p>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                <div class="card">
+                    <h3>1. Add VIP Scanner</h3>
+                    <form method="POST" action="/settings">
+                        <input type="hidden" name="action" value="add">
+                        <label>AE Title (Exact Match):</label>
+                        <input type="text" name="ae_title" placeholder="e.g., ER_SCANNER_1" required>
+                        <label>IP Address:</label>
+                        <input type="text" name="ip_address" placeholder="192.168.1.50" required>
+                        <label>Port:</label>
+                        <input type="number" name="port" placeholder="104" required>
+                        <label>Description (Optional):</label>
+                        <input type="text" name="description" placeholder="Main ER Scanner">
+                        <button type="submit" class="btn" style="margin-top: 10px;">Authorize Hardware</button>
+                    </form>
+                </div>
+                <div class="card">
+                    <h3>Authorized Scanners</h3>
+                    <table>
+                        <tr>
+                            <th>AE Title</th>
+                            <th>IP / Port</th>
+                            <th>Action</th>
+                        </tr>
+                        {% for scanner in scanners %}
+                        <tr>
+                            <td><strong>{{ scanner.ae_title }}</strong></td>
+                            <td>{{ scanner.ip_address }}:{{ scanner.port }}</td>
+                            <td>
+                                <form method="POST" action="/settings" style="margin:0;">
+                                    <input type="hidden" name="action" value="delete">
+                                    <input type="hidden" name="scanner_id" value="{{ scanner.id }}">
+                                    <button type="submit" class="btn btn-danger">Revoke</button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </table>
+                </div>
+            </div>
+
+            <div class="card" style="margin-top: 20px;">
+                <h3>2. Modality Firewall</h3>
+                <form method="POST" action="/settings"
+                    style="display: flex; gap: 10px; align-items: end; margin-bottom: 20px;">
+                    <input type="hidden" name="action" value="add_modality">
+                    <div style="flex-grow: 1;">
+                        <label>Official DICOM Modality (e.g., CT, MR):</label>
+                        <input type="text" name="modality_code" style="margin:0;" required>
+                    </div>
+                    <button type="submit" class="btn">Whitelist Modality</button>
+                </form>
+                <table>
+                    <tr>
+                        <th>Allowed Modalities</th>
+                        <th>Action</th>
+                    </tr>
+                    {% for mod in modalities %}
+                    <tr>
+                        <td><strong>{{ mod.name }}</strong></td>
+                        <td style="width: 100px;">
+                            <form method="POST" action="/settings" style="margin:0;">
+                                <input type="hidden" name="action" value="delete_modality">
+                                <input type="hidden" name="modality_id" value="{{ mod.id }}">
+                                <button type="submit" class="btn btn-danger">Remove</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </table>
+            </div>
+        </div>
+
+        <div id="centers" class="tab-content">
+            <div class="card">
+                <h3>Configure Center Routing</h3>
+                <form method="POST" action="/admin/centers">
+                    <input type="hidden" name="action" value="add">
+
+                    <label>Center Code / ID:</label>
+                    <input type="text" name="center_code" id="centerCodeInput" placeholder="e.g., HOSP-01" required>
+
+                    <label>DICOM Header Institution Name (Tag 0008,0080):</label>
+                    <input type="text" name="dicom_institution_name" id="dicomNameInput"
+                        placeholder="e.g., City General Hospital" required>
+
+                    <label>Authorized Modalities:</label>
+                    <div style="display: flex; gap: 15px; margin-bottom: 15px; flex-wrap: wrap;">
+                        {% for mod in modalities %}
+                        <label style="font-weight: normal; margin-top: 0;">
+                            <input type="checkbox" name="modalities" value="{{ mod.name }}"> {{ mod.name }}
+                        </label>
+                        {% endfor %}
+                    </div>
+
+                    <button type="submit" class="btn">Save / Append Center Configuration</button>
+                    <p style="color: gray; font-size: 12px; margin-top: 10px;">* To add multiple DICOM names to the same
+                        center, simply enter the same Center ID and type the new DICOM Name.</p>
+                </form>
+            </div>
+
+            <div class="card">
+                <h3>Active Centers</h3>
+                <table>
+                    <tr>
+                        <th>Center ID</th>
+                        <th>Mapped DICOM Names</th>
+                        <th>Modalities</th>
+                        <th>Actions</th>
+                    </tr>
+                    {% for center in centers %}
+                    <tr>
+                        <td><strong style="font-size: 16px; color: #1e40af;">{{ center.center_code }}</strong></td>
+
+                        <td>
+                            {% for mapping in center.mappings %}
+                            <div
+                                style="background: #e2e8f0; padding: 4px 8px; border-radius: 4px; display: inline-block; margin-bottom: 4px; font-size: 13px;">
+                                {{ mapping.dicom_institution_name }}
+                                <form method="POST" action="/admin/centers" style="display:inline;">
+                                    <input type="hidden" name="action" value="delete_mapping">
+                                    <input type="hidden" name="mapping_id" value="{{ mapping.id }}">
+                                    <button type="submit" title="Remove Mapping"
+                                        style="background:none; border:none; color:#dc2626; cursor:pointer; padding:0 0 0 5px; font-weight:bold; font-size: 14px;">&times;</button>
+                                </form>
+                            </div>
+                            {% endfor %}
+                        </td>
+
+                        <td>
+                            {% for c_mod in center.modalities %}
+                            <span
+                                style="background: #dbeafe; padding: 2px 6px; border-radius: 4px; color: #1e40af; display: inline-block; margin-bottom: 2px; font-size: 12px; font-weight: bold;">
+                                {{ c_mod.modality_name }}
+                            </span>
+                            {% endfor %}
+                        </td>
+
+                        <td>
+                            <div style="display: flex; gap: 8px;">
+                                <button type="button" class="btn"
+                                    style="background: #f59e0b; padding: 6px 12px; font-size: 12px;"
+                                    onclick="document.getElementById('centerCodeInput').value = '{{ center.center_code }}'; document.getElementById('dicomNameInput').focus();">
+                                    Edit / Add Mapping
+                                </button>
+
+                                <form method="POST" action="/admin/centers" style="margin:0;"
+                                    onsubmit="return confirm('Are you sure you want to completely delete {{ center.center_code }} and all its mappings?');">
+                                    <input type="hidden" name="action" value="delete_center">
+                                    <input type="hidden" name="center_id" value="{{ center.id }}">
+                                    <button type="submit" class="btn btn-danger"
+                                        style="padding: 6px 12px; font-size: 12px;">Delete</button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </table>
+            </div>
+        </div>
+
+        <div id="mapping" class="tab-content">
+            <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 20px; margin-bottom: 20px;">
+                <div class="card">
+                    <h3>Create Override Link</h3>
+                    <form action="/add-mapping" method="POST">
+                        <label>Machine Text (Exact Match):</label>
+                        <input type="text" name="machine_desc" placeholder="e.g., CHEST-XRAY 2" required>
+
+                        <label>Official Hospital Rule(s):</label>
+                        <input type="text" id="adminRuleSearch" placeholder="🔍 Search modality or description..."
+                            onkeyup="filterAdminRules()" style="margin-bottom: 5px; border: 2px solid #3498db;">
+
+                        <!-- 🚨 THE NEW SCROLLABLE CHECKBOX LIST -->
+                        <div id="adminRuleList"
+                            style="max-height: 180px; overflow-y: auto; border: 1px solid #cbd5e1; border-radius: 4px; padding: 5px; background: white;">
+                            {% for rule in rules %}
+                            <label class="rule-item"
+                                style="display: flex; align-items: center; padding: 6px; border-bottom: 1px solid #f1f5f9; cursor: pointer; font-weight: normal; margin: 0; transition: background 0.2s;"
+                                onmouseover="this.style.background='#f8fafc'"
+                                onmouseout="this.style.background='transparent'">
+                                <input type="checkbox" name="rule_id" value="{{ rule.rule_id }}"
+                                    style="width: auto; margin: 0 10px 0 0; cursor: pointer;">
+                                <span style="flex-grow: 1;">[{{ rule.modality }}] {{ rule.original_description }}</span>
+                            </label>
+                            {% endfor %}
+                            <div id="noRulesMsg"
+                                style="display: none; padding: 10px; text-align: center; color: gray; font-size: 13px;">
+                                No matching rules found.</div>
+                        </div>
+
+                        <button type="submit" class="btn" style="width:100%; margin-top: 15px;">Save Mapping</button>
+                    </form>
+                </div>
+                <div class="card" style="max-height: 400px; overflow-y: auto;">
+                    <h3>Active Overrides</h3>
+                    <table>
+                        <tr>
+                            <th>Machine Output</th>
+                            <th>→</th>
+                            <th>Official Rule</th>
+                            <th>ID</th>
+                            <th>Action</th>
+                        </tr>
+                        {% for map in mappings %}
+                        <tr>
+                            <td style="font-weight: bold; color: #b91c1c;">{{ map.machine_description }}</td>
+                            <td>→</td>
+                            <td style="color: #2563eb;">{{ map.rule.original_description }}</td>
+                            <td>#{{ map.rule_id }}</td>
+                            <td>
+                                <form method="POST" action="/delete-mapping" style="margin:0;"
+                                    onsubmit="return confirm('Are you sure you want to delete this mapping?');">
+                                    <input type="hidden" name="mapping_id" value="{{ map.id }}">
+                                    <button type="submit" class="btn btn-danger"
+                                        style="padding: 4px 8px; font-size: 12px;">Delete</button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="5" style="text-align: center; color: gray; padding: 20px;">No active overrides
+                                created yet.</td>
+                        </tr>
+                        {% endfor %}
+                    </table>
+                </div>
+            </div>
+
+            <div class="card">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                    <h3 style="margin: 0; border: none; padding-bottom: 0;">Official Hospital Dictionary Reference ({{
+                        rules|length }} Active Rules)</h3>
+                    <input type="text" id="ruleSearchInput" onkeyup="searchRulesTable()"
+                        placeholder="🔍 Search ID, Modality, or Desc..." style="width: 300px; margin: 0; padding: 8px;">
+                </div>
+
+                <div class="table-wrapper"
+                    style="max-height: 500px; overflow-y: auto; border: 1px solid #e2e8f0; border-radius: 6px;">
+                    <table id="rulesTable" style="margin: 0;">
+                        <thead style="position: sticky; top: 0; z-index: 1;">
+                            <tr>
+                                <th onclick="sortTable('rulesTable', 0)" style="cursor: pointer;" title="Click to sort">
+                                    Rule ID ↕️</th>
+                                <th onclick="sortTable('rulesTable', 1)" style="cursor: pointer;" title="Click to sort">
+                                    Modality ↕️</th>
+                                <th onclick="sortTable('rulesTable', 2)" style="cursor: pointer;" title="Click to sort">
+                                    Official Description (API) ↕️</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for rule in rules %}
+                            <tr>
+                                <td style="font-weight: 600;">#{{ rule.rule_id }}</td>
+                                <td>
+                                    <span class="badge bg-primary">{{ rule.modality }}</span>
+                                </td>
+                                <td>{{ rule.original_description }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div id="zipper" class="tab-content">
+            <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 20px;">
+                <div class="card">
+                    <h3>Configure Modality Limit</h3>
+                    <form method="POST" action="/zip-rules">
+                        <input type="hidden" name="action" value="save">
+                        <label>Select Modality:</label>
+                        <select name="modality_name" required>
+                            <option value="" disabled selected>Choose...</option>
+                            {% for mod in modalities %}
+                            <option value="{{ mod.name }}">{{ mod.name }}</option>
+                            {% endfor %}
+                        </select>
+                        <label>Max Files Per Zip Archive:</label>
+                        <input type="number" name="limit" min="1" placeholder="100" required>
+                        <button type="submit" class="btn" style="width:100%; margin-top: 10px;">Save
+                            Configuration</button>
+                    </form>
+                </div>
+                <div class="card">
+                    <h3>Active Zipping Rules</h3>
+                    <table>
+                        <tr>
+                            <th>Modality</th>
+                            <th>Batch Limit</th>
+                            <th>Last Updated</th>
+                            <th>Action</th>
+                        </tr>
+                        {% for rule in zip_rules %}
+                        <tr>
+                            <td><strong>{{ rule.modality_name }}</strong></td>
+                            <td><span style="background: #e2e8f0; padding: 4px 8px; border-radius: 4px;">{{
+                                    rule.max_files_per_zip }} files</span></td>
+                            <td style="color: gray; font-size: 12px;">{{ rule.last_updated.strftime('%Y-%m-%d %H:%M') if
+                                rule.last_updated else 'N/A' }}</td>
+                            <td>
+                                <form method="POST" action="/zip-rules" style="margin:0;">
+                                    <input type="hidden" name="action" value="delete">
+                                    <input type="hidden" name="rule_id" value="{{ rule.id }}">
+                                    <button type="submit" class="btn btn-danger">Delete</button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div id="compression" class="tab-content">
+            <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 20px;">
+                <div class="card">
+                    <h3>Configure Modality Compression</h3>
+                    <form method="POST" action="/compression-rules">
+                        <input type="hidden" name="action" value="save">
+
+                        <label>Select Modality:</label>
+                        <select name="modality_name" required>
+                            <option value="" disabled selected>Choose...</option>
+                            {% for mod in modalities %}
+                            <option value="{{ mod.name }}">{{ mod.name }}</option>
+                            {% endfor %}
+                        </select>
+
+                        <label style="margin-top: 15px;">Compression Type:</label>
+                        <div
+                            style="background: #f8fafc; padding: 10px; border-radius: 6px; border: 1px solid #e2e8f0; margin-bottom: 15px;">
+                            <label style="font-weight: normal; margin-top: 0;">
+                                <input type="radio" name="compression_type" value="COPY"
+                                    onchange="toggleCompressionSlider()">
+                                Copy (Original / Uncompressed)
+                            </label><br>
+                            <label style="font-weight: normal; margin-top: 5px;">
+                                <input type="radio" name="compression_type" value="LOSSLESS"
+                                    onchange="toggleCompressionSlider()" checked>
+                                Lossless (Mathematically Perfect)
+                            </label><br>
+                            <label style="font-weight: normal; margin-top: 5px;">
+                                <input type="radio" name="compression_type" value="LOSSY" id="lossy-radio"
+                                    onchange="toggleCompressionSlider()">
+                                Lossy (JPEG 2000 High Compression)
+                            </label>
+                        </div>
+
+                        <label>Lossy Quality Level: <span id="comp-val-display"
+                                style="color: #2563eb;">100</span>%</label>
+                        <input type="range" name="compression_level" id="comp-slider" min="10" max="100" value="100"
+                            disabled style="width: 100%; opacity: 0.5;"
+                            oninput="document.getElementById('comp-val-display').innerText = this.value">
+                        <small style="color: gray; display: block; margin-bottom: 15px;">*Slider only active when LOSSY
+                            is selected.</small>
+
+                        <button type="submit" class="btn" style="width:100%; background: #2563eb;">Save
+                            Configuration</button>
+                    </form>
+                </div>
+
+                <div class="card">
+                    <h3>Active Compression Rules</h3>
+                    <table>
+                        <tr>
+                            <th>Modality</th>
+                            <th>Type</th>
+                            <th>Quality Level</th>
+                            <th>Action</th>
+                        </tr>
+                        {% for rule in comp_rules %}
+                        <tr>
+                            <td><strong>{{ rule.modality_name }}</strong></td>
+                            <td>
+                                {% if rule.compression_type == 'LOSSLESS' %}
+                                <span class="badge" style="background: #dcfce7; color: #166534;">💎 Lossless</span>
+                                {% elif rule.compression_type == 'LOSSY' %}
+                                <span class="badge" style="background: #fef08a; color: #991b1b;">📉 Lossy</span>
+                                {% else %}
+                                <span class="badge" style="background: #e2e8f0; color: #475569;">📁 Copy</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if rule.compression_type == 'LOSSY' %}
+                                <strong>{{ rule.compression_level }}%</strong>
+                                {% else %}
+                                <span style="color: gray;">N/A</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <form method="POST" action="/compression-rules" style="margin:0;">
+                                    <input type="hidden" name="action" value="delete">
+                                    <input type="hidden" name="rule_id" value="{{ rule.id }}">
+                                    <button type="submit" class="btn btn-danger"
+                                        style="padding: 4px 8px; font-size: 12px;">Delete</button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="4" style="text-align: center; color: gray; padding: 20px;">No custom
+                                compression rules defined. All modalities default to LOSSLESS.</td>
+                        </tr>
+                        {% endfor %}
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div id="sys_config" class="tab-content">
+            <div class="card" style="border-left: 4px solid #8b5cf6;">
+                <h3>🌐 API Endpoints & Configuration</h3>
+                <p style="color: #64748b; font-size: 14px; margin-bottom: 20px;">
+                    Update the core communication URLs. If left blank, the system will fall back to the defaults.
+                </p>
+
+                <form method="POST" action="/settings">
+                    <input type="hidden" name="action" value="update_urls">
+
+                    <div style="display: grid; grid-template-columns: 1fr; gap: 15px;">
+                        {% set safe_settings = sys_settings or {} %}
+
+                        <div>
+
+                            <label>Auth API URL:</label>
+                            <input type="text" name="AUTH_API_URL"
+                                value="{{ safe_settings.get('AUTH_API_URL', 'https://icare.anikrafoundation.com:8443/teleoffline/login/login') }}"
+                                required>
+                        </div>
+
+                        <div>
+                            <label>Create Study API URL (api_client.py):</label>
+                            <input type="text" name="CREATE_STUDY_API_URL"
+                                value="{{ safe_settings.get('CREATE_STUDY_API_URL', 'https://icare.anikrafoundation.com:8443/weasisintegratorwf/studymasterservice/createStudy') }}"
+                                required>
+                        </div>
+
+                        <div>
+                            <label>Update Study API URL (push_updates):</label>
+                            <input type="text" name="UPDATE_STUDY_API_URL"
+                                value="{{ safe_settings.get('UPDATE_STUDY_API_URL', 'https://icare.anikrafoundation.com:8443/weasisintegratorwf/studymasterservice/updateStudy/') }}"
+                                required>
+                        </div>
+
+                        <div>
+                            <label>Description Sync API URL:</label>
+                            <input type="text" name="DESCRIPTION_API_URL"
+                                value="{{ safe_settings.get('DESCRIPTION_API_URL', 'https://icare.anikrafoundation.com:8443/weasisintegratorwf/lookupmasterservice/getdescription/') }}"
+                                required>
+                        </div>
+
+                        <div>
+                            <label>TUS Uploader URL:</label>
+                            <input type="text" name="TUS_API_URL"
+                                value="{{ safe_settings.get('TUS_API_URL', 'http://127.0.0.1:1080/files/') }}" required>
+                        </div>
+                        <div>
+                            <label>TUS Uploader Username:</label>
+                            <input type="text" name="TUS_API_USER"
+                                value="{{ safe_settings.get('TUS_API_USER', 'unconfigured_user') }}" required>
+                        </div>
+
+                        <div>
+                            <label>TUS Uploader key:</label>
+                            <input type="text" name="TUS_API_KEY"
+                                value="{{ safe_settings.get('TUS_API_KEY', 'admin') }}" required>
+                        </div>
+
+                        <div>
+                            <label>INITIAL UPLOAD CHUNK SIZE</label>
+                            <input type="text" name="UL_CHUNK" value="{{ safe_settings.get('UL_CHUNK', '1048576') }}"
+                                required>
+                        </div>
+
+                        <div>
+                            <label>INITIAL UPLOAD WORKER</label>
+                            <input type="text" name="UL_WORKERS" value="{{ safe_settings.get('UL_WORKERS', '2') }}"
+                                required>
+                        </div>
+
+                        <div>
+                            <label>MAX UPLOAD RETRIES</label>
+                            <input type="text" name="UL_MAX_RETRIES"
+                                value="{{ safe_settings.get('UL_MAX_RETRIES', '7') }}" required>
+                        </div>
+
+                        <div>
+                            <label>LISTENING PORT </label>
+                            <input type="text" name="DICOM_PORT" value="{{ safe_settings.get('DICOM_PORT', '11114') }}"
+                                required>
+                        </div>
+
+                        <div>
+                            <label>MAXIMUM CONNECTION ALLOWED </label>
+                            <input type="text" name="MAX_CONCURRENT_CONNECTIONS"
+                                value="{{ safe_settings.get('MAX_CONCURRENT_CONNECTIONS', '5') }}" required>
+                        </div>
+
+                        <div>
+                            <label>AE TITLE </label>
+                            <input type="text" name="DICOM_AE_TITLE"
+                                value="{{ safe_settings.get('DICOM_AE_TITLE', 'ICARE_STORE') }}" required>
+                        </div>
+
+                        <div>
+                            <label>HOST </label>
+                            <input type="text" name="HOST" value="{{ safe_settings.get('HOST', '127.0.0.1') }}"
+                                required>
+                        </div>
+
+                        <div>
+                            <label>How many sec you want wait after receiving all images from scanner/console </label>
+                            <input type="text" name="STUDY_COOLDOWN_SECONDS"
+                                value="{{ safe_settings.get('STUDY_COOLDOWN_SECONDS', '15') }}" required>
+                        </div>
+                        <div>
+                            <label>Database Retention (Days to keep records):</label>
+                            <input type="number" name="DB_RETENTION_DAYS"
+                                value="{{ safe_settings.get('DB_RETENTION_DAYS', '30') }}" required>
+                        </div>
+
+                        <div>
+                            <label>Backup Retention (Days to keep raw DICOMs):</label>
+                            <input type="number" name="BACKUP_RETENTION_DAYS"
+                                value="{{ safe_settings.get('BACKUP_RETENTION_DAYS', '60') }}" required>
+                        </div>
+
+                        <div>
+                            <label>Working Data Retention (Days to keep staging/zip files):</label>
+                            <input type="number" name="WORKING_RETENTION_DAYS"
+                                value="{{ safe_settings.get('WORKING_RETENTION_DAYS', '7') }}" required>
+                        </div>
+                        <h4
+                            style="margin-top: 20px; color: #2c3e50; border-bottom: 2px solid #eee; padding-bottom: 5px;">
+                            Dashboard Display Settings</h4>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+
+                            <div class="custom-form-group">
+                                <label>Hospital / Center Name</label>
+                                <input type="text" class="custom-form-control" name="LOCAL_CENTER_NAME"
+                                    value="{{ sys_settings.get('LOCAL_CENTER_NAME', 'DICOM Study Dashboard') }}">
+                            </div>
+
+                            <div class="custom-form-group">
+                                <label>Center Code </label>
+                                <input type="text" class="custom-form-control" name="LOCAL_CENTER_CODE"
+                                    value="{{ sys_settings.get('LOCAL_CENTER_CODE', '') }}">
+                            </div>
+
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn" style="background: #8b5cf6; margin-top: 20px; width: 100%;">💾
+                        Save All Configurations</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ==========================================
+        // 1. SMART TAB MEMORY SYSTEM
+        // ==========================================
+        function openTab(tabName) {
+            // Hide all tab content
+            let tabcontent = document.getElementsByClassName("tab-content");
+            for (let i = 0; i < tabcontent.length; i++) {
+                tabcontent[i].style.display = "none";
+                tabcontent[i].classList.remove("active");
+            }
+
+            // Deactivate all tab buttons
+            let tablinks = document.getElementsByClassName("tab-btn");
+            for (let i = 0; i < tablinks.length; i++) {
+                tablinks[i].classList.remove("active");
+            }
+
+            // Show the selected tab
+            document.getElementById(tabName).style.display = "block";
+            document.getElementById(tabName).classList.add("active");
+
+            // Highlight the clicked button
+            let activeBtn = document.querySelector(`button[onclick="openTab('${tabName}')"]`);
+            if (activeBtn) activeBtn.classList.add("active");
+
+            // SAVE TO MEMORY: Remember this tab for when the page reloads
+            localStorage.setItem('activeAdminTab', tabName);
+        }
+
+        // When the page loads, check memory for the last opened tab
+        document.addEventListener("DOMContentLoaded", function () {
+            let savedTab = localStorage.getItem('activeAdminTab');
+            // If a tab is saved in memory, open it. Otherwise, default to 'security'
+            if (savedTab && document.getElementById(savedTab)) {
+                openTab(savedTab);
+            } else {
+                openTab('security');
+            }
+        });
+
+        // ==========================================
+        // 2. DYNAMIC TABLE SEARCH
+        // ==========================================
+        function searchRulesTable() {
+            var input, filter, table, tr, td, i, j, txtValue;
+            input = document.getElementById("ruleSearchInput");
+            filter = input.value.toUpperCase();
+            table = document.getElementById("rulesTable");
+            tr = table.getElementsByTagName("tr");
+
+            for (i = 1; i < tr.length; i++) {
+                tr[i].style.display = "none";
+                td = tr[i].getElementsByTagName("td");
+                for (j = 0; j < td.length; j++) {
+                    if (td[j]) {
+                        txtValue = td[j].textContent || td[j].innerText;
+                        if (txtValue.toUpperCase().indexOf(filter) > -1) {
+                            tr[i].style.display = "";
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ==========================================
+        // 3. DYNAMIC TABLE SORTING
+        // ==========================================
+        function sortTable(tableId, n) {
+            var table, rows, switching, i, x, y, shouldSwitch, dir, switchcount = 0;
+            table = document.getElementById(tableId);
+            switching = true;
+            dir = "asc";
+
+            while (switching) {
+                switching = false;
+                rows = table.rows;
+
+                for (i = 1; i < (rows.length - 1); i++) {
+                    shouldSwitch = false;
+                    x = rows[i].getElementsByTagName("TD")[n];
+                    y = rows[i + 1].getElementsByTagName("TD")[n];
+
+                    if (!x || !y) continue;
+
+                    let textX = x.innerText.toLowerCase().replace('#', '').trim();
+                    let textY = y.innerText.toLowerCase().replace('#', '').trim();
+
+                    let numX = parseFloat(textX);
+                    let numY = parseFloat(textY);
+                    let isNumeric = !isNaN(numX) && !isNaN(numY);
+
+                    if (dir == "asc") {
+                        if (isNumeric ? numX > numY : textX > textY) {
+                            shouldSwitch = true;
+                            break;
+                        }
+                    } else if (dir == "desc") {
+                        if (isNumeric ? numX < numY : textX < textY) {
+                            shouldSwitch = true;
+                            break;
+                        }
+                    }
+                }
+                if (shouldSwitch) {
+                    rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);
+                    switching = true;
+                    switchcount++;
+                } else {
+                    if (switchcount == 0 && dir == "asc") {
+                        dir = "desc";
+                        switching = true;
+                    }
+                }
+            }
+        }
+        // ==========================================
+        // 4. COMPRESSION UI LOGIC
+        // ==========================================
+        function toggleCompressionSlider() {
+            const isLossy = document.getElementById('lossy-radio').checked;
+            const slider = document.getElementById('comp-slider');
+
+            if (isLossy) {
+                slider.disabled = false;
+                slider.style.opacity = "1";
+            } else {
+                slider.disabled = true;
+                slider.style.opacity = "0.5";
+                // Reset visual counter to 100 when disabled
+                slider.value = 100;
+                document.getElementById('comp-val-display').innerText = "100";
+            }
+        }
+        // ==========================================
+        // DYNAMIC DESCRIPTION MAPPING SEARCH
+        // ==========================================
+        function filterAdminRules() {
+            const input = document.getElementById('adminRuleSearch');
+            const filter = input.value.toLowerCase();
+            const list = document.getElementById('adminRuleList');
+            const items = list.getElementsByClassName('rule-item');
+            let visibleCount = 0;
+
+            for (let i = 0; i < items.length; i++) {
+                let text = items[i].textContent || items[i].innerText;
+                
+                if (text.toLowerCase().indexOf(filter) > -1) {
+                    items[i].style.display = "flex";
+                    visibleCount++;
+                } else {
+                    items[i].style.display = "none";
+                }
+            }
+            
+            // Show a "Not Found" message if the search yields zero results
+            document.getElementById('noRulesMsg').style.display = (visibleCount === 0) ? "block" : "none";
+        }
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>iCare DICOM Gateway</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+
+    <style>
+    :root {
+        --bg-root:       #08071a;
+        --bg-app:        #0d0c22;
+        --bg-titlebar:   #130f32;
+        --bg-toolbar:    #100e28;
+        --bg-table-head: #0f0d25;
+        --bg-row-even:   #0d0c22;
+        --bg-row-odd:    #100e2b;
+        --bg-row-hover:  #181540;
+        --bg-input:      #0a091f;
+        --bg-modal:      #120f2e;
+
+        --border:        rgba(120,100,255,0.15);
+        --border-hi:     rgba(140,120,255,0.30);
+        --border-input:  rgba(120,100,255,0.25);
+
+        --purple:        #7c5cfc;
+        --purple-lt:     #9b7fff;
+        --purple-dim:    rgba(124,92,252,0.15);
+
+        --green:         #00e676;
+        --green-dim:     rgba(0,230,118,0.12);
+        --amber:         #ffb300;
+        --amber-dim:     rgba(255,179,0,0.12);
+        --red:           #ff4d6d;
+        --red-dim:       rgba(255,77,109,0.12);
+        --cyan:          #00cfff;
+        --cyan-dim:      rgba(0,207,255,0.10);
+        --blue-dim:      rgba(59,130,246,0.12);
+
+        --txt-hi:    #ffffff;
+        --txt-pri:   #d4cfff;
+        --txt-sec:   #9590c8;
+        --txt-mute:  #5e5a8a;
+        --txt-dim:   #35315a;
+
+        --font-ui:   'Rajdhani', sans-serif;
+        --font-mono: 'Share Tech Mono', monospace;
+
+        --r-sm: 4px;
+        --r-md: 8px;
+        --r-lg: 12px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { font-size: 14px; }
+
+    body {
+        font-family: var(--font-ui);
+        background: var(--bg-root);
+        color: var(--txt-pri);
+        min-height: 100vh;
+        overflow-x: hidden;
+        background-image: radial-gradient(ellipse 70% 50% at 50% -10%, rgba(124,92,252,0.06) 0%, transparent 70%);
+    }
+
+    /* ── APP WINDOW ── */
+    .app-window {
+        max-width: 1800px;
+        margin: 0 auto;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        border-left: 1px solid var(--border);
+        border-right: 1px solid var(--border);
+    }
+
+    /* ── TITLE BAR ── */
+    .titlebar {
+        background: linear-gradient(90deg, #1a1245 0%, #120f32 50%, #1a1245 100%);
+        border-bottom: 1px solid var(--border-hi);
+        padding: 0 16px;
+        height: 44px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-shrink: 0;
+        position: sticky;
+        top: 0;
+        z-index: 200;
+        box-shadow: 0 2px 16px rgba(0,0,0,0.6);
+    }
+    .titlebar-left { display:flex; align-items:center; gap:10px; }
+    .app-logo { font-size:19px; font-weight:700; letter-spacing:0.05em; color:var(--txt-hi); text-transform:uppercase; }
+    .app-logo span { color:var(--purple-lt); }
+
+    .titlebar-center {
+        position:absolute; left:50%; transform:translateX(-50%);
+        display:flex; align-items:center; gap:8px;
+        pointer-events:none;
+    }
+    .center-badge {
+        background: rgba(124,92,252,0.2);
+        border: 1px solid var(--border-hi);
+        border-radius: 20px;
+        padding: 3px 14px;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--txt-pri);
+        white-space: nowrap;
+        max-width: 280px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .center-code-tag {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        color: var(--txt-mute);
+        background: rgba(0,0,0,0.3);
+        border: 1px solid var(--border);
+        border-radius: 3px;
+        padding: 2px 6px;
+    }
+    .titlebar-right { display:flex; align-items:center; gap:8px; }
+    .status-dot {
+        width:9px; height:9px; border-radius:50%;
+        background:var(--green);
+        box-shadow: 0 0 8px var(--green), 0 0 16px rgba(0,230,118,0.4);
+        animation: pdot 2.5s ease-in-out infinite;
+    }
+    @keyframes pdot {
+        0%,100%{ opacity:1; box-shadow:0 0 8px var(--green),0 0 16px rgba(0,230,118,0.4); }
+        50%    { opacity:0.5; box-shadow:0 0 4px var(--green); }
+    }
+    .status-lbl { font-size:12px; font-weight:700; color:var(--green); letter-spacing:0.05em; text-transform:uppercase; }
+
+    /* ── TOOLBAR ── */
+    .toolbar {
+        background: var(--bg-toolbar);
+        border-bottom: 2px solid var(--purple);
+        padding: 8px 16px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+        position: sticky;
+        top: 44px;
+        z-index: 190;
+        box-shadow: 0 2px 12px rgba(124,92,252,0.15);
+    }
+    .toolbar-sep { flex:1; min-width:4px; }
+
+    /* ── INPUTS ── */
+    .tb-in {
+        background: var(--bg-input);
+        border: 1px solid var(--border-input);
+        border-radius: var(--r-sm);
+        color: var(--txt-pri);
+        font-family: var(--font-ui);
+        font-size: 13px;
+        font-weight: 500;
+        padding: 0 10px;
+        height: 30px;
+        outline: none;
+        transition: border-color .15s, box-shadow .15s;
+    }
+    .tb-in:focus { border-color:var(--purple); box-shadow:0 0 0 2px var(--purple-dim); }
+    .tb-in::placeholder { color:var(--txt-mute); }
+    .tb-in[type="date"]::-webkit-calendar-picker-indicator { filter:invert(0.5) sepia(1) saturate(5) hue-rotate(230deg); cursor:pointer; }
+    select.tb-in { cursor:pointer; }
+    select.tb-in option { background:var(--bg-modal); color:var(--txt-pri); }
+
+    .tb-search { position:relative; flex:1; min-width:180px; max-width:280px; }
+    .tb-search .si { position:absolute; left:9px; top:50%; transform:translateY(-50%); color:var(--txt-mute); font-size:13px; pointer-events:none; }
+    .tb-search .tb-in { padding-left:28px; width:100%; }
+
+    /* ── BUTTONS ── */
+    .btn {
+        display:inline-flex; align-items:center; justify-content:center;
+        gap:5px; border:none; border-radius:var(--r-sm);
+        font-family:var(--font-ui); font-weight:700; font-size:13px;
+        letter-spacing:0.03em; cursor:pointer; text-decoration:none;
+        white-space:nowrap; transition:all .15s ease;
+        height:30px; padding:0 14px;
+    }
+    .btn-purple { background:linear-gradient(135deg,#7c5cfc,#5a3de8); color:#fff; box-shadow:0 2px 10px rgba(124,92,252,.35); }
+    .btn-purple:hover { filter:brightness(1.12); box-shadow:0 4px 16px rgba(124,92,252,.5); transform:translateY(-1px); }
+    .btn-outline { background:transparent; color:var(--purple-lt); border:1px solid var(--border-hi); }
+    .btn-outline:hover { background:var(--purple-dim); color:#fff; }
+    .btn-ghost { background:rgba(255,255,255,.05); color:var(--txt-sec); border:1px solid var(--border); }
+    .btn-ghost:hover { background:rgba(255,255,255,.09); color:var(--txt-pri); }
+    .btn-red-ghost { background:var(--red-dim); color:var(--red); border:1px solid rgba(255,77,109,.3); }
+    .btn-red-ghost:hover { background:rgba(255,77,109,.22); }
+    .btn-amber-ghost { background:var(--amber-dim); color:var(--amber); border:1px solid rgba(255,179,0,.3); }
+    .btn-amber-ghost:hover { background:rgba(255,179,0,.22); }
+    .btn-green-ghost { background:var(--green-dim); color:var(--green); border:1px solid rgba(0,230,118,.3); }
+    .btn-green-ghost:hover { background:rgba(0,230,118,.2); }
+    .btn-sm { height:26px; padding:0 10px; font-size:12px; }
+    .btn-xs { height:22px; padding:0 8px; font-size:11px; }
+    .btn-icon { height:22px; width:22px; padding:0; background:rgba(255,255,255,.04); color:var(--txt-mute); border:1px solid var(--border); border-radius:var(--r-sm); font-size:11px; }
+    .btn-icon:hover { background:var(--purple-dim); color:var(--purple-lt); border-color:var(--border-hi); }
+
+    /* ── FLASH ── */
+    .flash-wrap { padding:8px 16px 0; }
+    .flash { display:flex; justify-content:space-between; align-items:center; padding:9px 14px; border-radius:var(--r-sm); font-size:13px; font-weight:600; margin-bottom:6px; transition:opacity .3s; }
+    .flash-success { background:var(--green-dim); border:1px solid rgba(0,230,118,.25); color:#6effc7; }
+    .flash-error   { background:var(--red-dim);   border:1px solid rgba(255,77,109,.25); color:#ffb3bf; }
+    .flash-close { background:none; border:none; color:inherit; font-size:18px; cursor:pointer; opacity:.5; line-height:1; padding:0 0 0 10px; }
+    .flash-close:hover { opacity:1; }
+
+    /* ── TABLE WRAPPER — key to responsiveness ── */
+    .table-wrap {
+        flex:1;
+        overflow-x:auto;
+        overflow-y:auto;
+        -webkit-overflow-scrolling:touch;
+        scrollbar-width:thin;
+        scrollbar-color:var(--purple-dim) transparent;
+    }
+    .table-wrap::-webkit-scrollbar { width:5px; height:5px; }
+    .table-wrap::-webkit-scrollbar-track { background:transparent; }
+    .table-wrap::-webkit-scrollbar-thumb { background:var(--border-hi); border-radius:4px; }
+
+    /* ── TABLE ── */
+    table { width:100%; min-width:980px; border-collapse:collapse; }
+
+    thead {
+        position:sticky; top:0; z-index:10;
+        background:var(--bg-table-head);
+    }
+    th {
+        padding:9px 10px;
+        text-align:left;
+        font-family:var(--font-mono);
+        font-size:10.5px;
+        font-weight:400;
+        letter-spacing:0.08em;
+        text-transform:uppercase;
+        color:var(--purple-lt);
+        border-bottom:2px solid var(--purple);
+        border-right:1px solid var(--border);
+        white-space:nowrap;
+        user-select:none;
+    }
+    th:last-child { border-right:none; }
+
+    tbody tr { border-bottom:1px solid var(--border); transition:background .1s; }
+    tbody tr:nth-child(even) { background:var(--bg-row-even); }
+    tbody tr:nth-child(odd)  { background:var(--bg-row-odd); }
+    tbody tr:hover           { background:var(--bg-row-hover); }
+
+    td {
+        padding:6px 10px;
+        font-size:13px;
+        color:var(--txt-pri);
+        border-right:1px solid var(--border);
+        vertical-align:middle;
+        overflow:hidden;
+        white-space:nowrap;
+        text-overflow:ellipsis;
+        max-width:200px;
+    }
+    td:last-child { border-right:none; }
+
+    /* ── MODALITY CHIPS ── */
+    .mod { display:inline-block; padding:1px 8px; border-radius:3px; font-family:var(--font-mono); font-size:11.5px; font-weight:600; letter-spacing:0.06em; }
+    .mod-CT  { background:var(--cyan-dim);  color:var(--cyan);   border:1px solid rgba(0,207,255,.25); }
+    .mod-MR  { background:rgba(139,92,246,.12); color:#c4b5fd;   border:1px solid rgba(139,92,246,.25); }
+    .mod-US  { background:var(--green-dim); color:var(--green);  border:1px solid rgba(0,230,118,.25); }
+    .mod-CR, .mod-DX { background:var(--amber-dim); color:var(--amber); border:1px solid rgba(255,179,0,.25); }
+    .mod-def { background:rgba(255,255,255,.06); color:var(--txt-sec); border:1px solid var(--border); }
+
+    /* ── BADGES ── */
+    .badge { display:inline-flex; align-items:center; gap:4px; padding:2px 9px; border-radius:20px; font-size:11.5px; font-weight:700; letter-spacing:0.03em; white-space:nowrap; }
+    .b-up   { background:var(--green-dim);  color:var(--green);  border:1px solid rgba(0,230,118,.3); }
+    .b-rcv  { background:var(--amber-dim);  color:var(--amber);  border:1px solid rgba(255,179,0,.3); }
+    .b-upl  { background:var(--blue-dim);   color:#93c5fd;       border:1px solid rgba(59,130,246,.3); }
+    .b-fail { background:var(--red-dim);    color:var(--red);    border:1px solid rgba(255,77,109,.3); }
+    .b-paus { background:rgba(100,100,150,.12); color:#9090b8;   border:1px solid rgba(100,100,150,.2); }
+    .b-ntp  { background:var(--red-dim);    color:#ffb3bf;       border:1px solid rgba(255,77,109,.2); }
+    .b-proc { background:var(--blue-dim);   color:#93c5fd;       border:1px solid rgba(59,130,246,.3); }
+    .b-blk  { background:var(--red-dim); border:1px solid rgba(255,77,109,.2); border-radius:var(--r-sm); padding:6px 8px; display:block; }
+    .b-blk .bt { color:var(--red); font-size:11px; font-weight:700; display:flex; align-items:center; gap:4px; margin-bottom:3px; }
+    .b-blk .bb { font-size:10.5px; color:var(--txt-mute); white-space:normal; line-height:1.4; max-width:150px; }
+
+    /* ── SPINNER ── */
+    .spinner { display:inline-block; width:9px; height:9px; border:1.5px solid currentColor; border-right-color:transparent; border-radius:50%; animation:spin .6s linear infinite; flex-shrink:0; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+
+    /* ── PROGRESS ── */
+    .p-wrap { min-width:100px; }
+    .p-lbl  { display:flex; justify-content:space-between; font-family:var(--font-mono); font-size:10.5px; margin-bottom:4px; color:var(--txt-sec); }
+    .p-pct-done { color:var(--green); font-weight:700; }
+    .p-pct-wip  { color:var(--cyan);  font-weight:700; }
+    .p-track    { background:rgba(255,255,255,.06); border-radius:3px; height:5px; overflow:hidden; }
+    .p-fill-done { background:linear-gradient(90deg,#00e676,#00b050); height:100%; border-radius:3px; transition:width .5s; box-shadow:0 0 6px rgba(0,230,118,.4); }
+    .p-fill-wip  { background:linear-gradient(90deg,#7c5cfc,#00cfff); height:100%; border-radius:3px; transition:width .5s; }
+    .p-stream { position:relative; overflow:hidden; }
+    .p-stream-bar {
+        position:absolute; top:0; left:-35%; height:100%; width:35%;
+        background:linear-gradient(90deg,transparent,var(--amber),transparent);
+        border-radius:3px;
+        animation:pstream 1.4s infinite linear;
+    }
+    @keyframes pstream { 0%{left:-35%} 100%{left:100%} }
+
+    /* ── EMPTY STATE ── */
+    .empty-state { text-align:center; padding:60px 20px; }
+    .empty-state-ico   { font-size:40px; color:var(--txt-dim); margin-bottom:12px; }
+    .empty-state-title { font-size:16px; font-weight:600; color:var(--txt-mute); margin-bottom:4px; }
+    .empty-state-sub   { font-size:13px; color:var(--txt-dim); }
+
+    /* ── STATUS BAR ── */
+    .sbar {
+        background:var(--bg-titlebar);
+        border-top:1px solid var(--border-hi);
+        padding:6px 16px;
+        display:flex; align-items:center;
+        justify-content:space-between;
+        flex-wrap:wrap; gap:8px;
+        flex-shrink:0;
+        position:sticky; bottom:0; z-index:200;
+    }
+    .sbar-live { display:flex; align-items:center; gap:8px; font-family:var(--font-mono); font-size:11.5px; color:var(--green); min-width:0; flex:1; }
+    .sbar-dot  { width:6px; height:6px; border-radius:50%; background:var(--green); flex-shrink:0; animation:pdot 2s infinite; }
+    #activity-text { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .sbar-right { display:flex; align-items:center; gap:12px; font-size:11.5px; color:var(--txt-mute); flex-shrink:0; }
+    .sbar-admin { color:var(--txt-dim); text-decoration:none; font-size:11.5px; font-weight:600; padding:2px 8px; border-radius:3px; border:1px solid var(--border); transition:all .15s; }
+    .sbar-admin:hover { color:var(--purple-lt); border-color:var(--border-hi); background:var(--purple-dim); }
+
+    /* ── MODALS ── */
+    .m-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.75); backdrop-filter:blur(4px); z-index:1040; }
+    .modal {
+        display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+        background:var(--bg-modal); width:460px; max-width:94vw; max-height:90vh;
+        border-radius:var(--r-lg); border:1px solid var(--border-hi);
+        box-shadow:0 20px 60px rgba(0,0,0,.8), 0 0 60px rgba(124,92,252,.1);
+        z-index:1050; flex-direction:column;
+        animation:mIn .18s cubic-bezier(0.34,1.56,0.64,1);
+    }
+    @keyframes mIn { from{opacity:0;transform:translate(-50%,-48%) scale(.95)} to{opacity:1;transform:translate(-50%,-50%) scale(1)} }
+
+    .m-hdr { display:flex; justify-content:space-between; align-items:center; padding:14px 18px; background:rgba(124,92,252,.1); border-bottom:1px solid var(--border-hi); flex-shrink:0; }
+    .m-title { font-size:13px; font-weight:700; color:var(--txt-hi); display:flex; align-items:center; gap:8px; letter-spacing:.04em; text-transform:uppercase; }
+    .m-ico { width:24px; height:24px; background:var(--purple-dim); border:1px solid var(--border-hi); border-radius:3px; display:flex; align-items:center; justify-content:center; color:var(--purple-lt); font-size:12px; }
+    .m-close { background:none; border:none; color:var(--txt-mute); font-size:18px; cursor:pointer; padding:2px; border-radius:3px; line-height:1; transition:all .15s; }
+    .m-close:hover { color:var(--red); background:var(--red-dim); }
+
+    .m-body { padding:18px; overflow-y:auto; flex:1; scrollbar-width:thin; scrollbar-color:var(--border-hi) transparent; }
+    .m-ftr  { display:flex; justify-content:flex-end; gap:8px; padding:12px 18px; border-top:1px solid var(--border); background:rgba(0,0,0,.2); flex-shrink:0; }
+
+    .fg { margin-bottom:14px; }
+    .fg:last-child { margin-bottom:0; }
+    .flbl { display:block; font-size:10.5px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; color:var(--txt-mute); margin-bottom:6px; }
+    .fctrl { width:100%; background:var(--bg-input); border:1px solid var(--border-input); border-radius:var(--r-sm); color:var(--txt-pri); font-family:var(--font-ui); font-size:13px; padding:8px 12px; outline:none; transition:border-color .15s,box-shadow .15s; }
+    .fctrl:focus { border-color:var(--purple); box-shadow:0 0 0 2px var(--purple-dim); }
+    .fctrl::placeholder { color:var(--txt-mute); }
+    textarea.fctrl { resize:vertical; min-height:110px; line-height:1.6; }
+    select.fctrl { cursor:pointer; }
+    select.fctrl option { background:var(--bg-modal); }
+
+    .fsw { position:relative; }
+    .fsw .si { position:absolute; left:10px; top:50%; transform:translateY(-50%); color:var(--txt-mute); pointer-events:none; }
+    .fsw input { padding-left:30px; }
+
+    .cb-list { background:var(--bg-input); border:1px solid var(--border-input); border-radius:var(--r-sm); height:190px; overflow-y:auto; padding:6px; scrollbar-width:thin; scrollbar-color:var(--border-hi) transparent; }
+    .cb-item { display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:3px; cursor:pointer; font-size:12.5px; color:var(--txt-sec); transition:all .1s; }
+    .cb-item:hover { background:var(--bg-row-hover); color:var(--txt-pri); }
+    .cb-item input[type="checkbox"] { accent-color:var(--purple); cursor:pointer; flex-shrink:0; }
+
+    .add-phys { margin-top:10px; padding:12px; background:var(--purple-dim); border:1px solid var(--border-hi); border-radius:var(--r-sm); }
+
+    /* ── RESPONSIVE ── */
+    @media (max-width:900px) {
+        .titlebar-center { display:none; }
+        table { min-width:800px; }
+    }
+    @media (max-width:600px) {
+        .titlebar { padding:0 10px; height:40px; top:0; }
+        .toolbar  { padding:6px 10px; top:40px; }
+        .app-logo { font-size:16px; }
+        .btn { padding:0 10px; font-size:12px; }
+        .tb-in { font-size:12px; height:28px; }
+        .tb-search { max-width:100%; }
+    }
+    </style>
+</head>
+
+<body>
+<div class="app-window">
+
+    <!-- TITLE BAR -->
+    <div class="titlebar">
+        <div class="titlebar-left">
+            <div class="app-logo">i<span>Care</span> Dicom Uploader</div>
+        </div>
+        <div class="titlebar-center">
+            <div class="center-badge">{{ center_name }}</div>
+            {% if center_code %}<span class="center-code-tag">{{ center_code }}</span>{% endif %}
+        </div>
+        <div class="titlebar-right">
+            <div class="status-dot"></div>
+            <span class="status-lbl">Receiver</span>
+        </div>
+    </div>
+
+    <!-- TOOLBAR -->
+    <form method="GET" action="/" style="display:contents;">
+    <div class="toolbar">
+        <div class="tb-search">
+            <i class="bi bi-search si"></i>
+            <input type="text" name="search_query" class="tb-in" placeholder="Patient ID / Name" value="{{ search_text }}">
+        </div>
+        <input type="date" name="date_filter" class="tb-in" style="width:130px;"
+               value="{{ date_filter if date_filter and date_filter != 'all' else '' }}">
+        <select name="modality_filter" class="tb-in" style="width:120px;">
+            <option value=""  {% if modality==''   %}selected{% endif %}>All Modality</option>
+            <option value="CT" {% if modality=='CT' %}selected{% endif %}>CT</option>
+            <option value="MR" {% if modality=='MR' %}selected{% endif %}>MRI</option>
+            <option value="US" {% if modality=='US' %}selected{% endif %}>Ultrasound</option>
+            <option value="CR" {% if modality=='CR' %}selected{% endif %}>X-Ray CR/DX</option>
+        </select>
+        <button type="submit" class="btn btn-outline"><i class="bi bi-funnel-fill"></i> Search</button>
+        <a href="/?date_filter=all" class="btn btn-ghost"><i class="bi bi-collection"></i> All</a>
+        <a href="/" class="btn btn-ghost" style="color:var(--red);"><i class="bi bi-x-circle-fill"></i> Reset</a>
+        <div class="toolbar-sep"></div>
+        <a href="/upload-page" class="btn btn-purple"><i class="bi bi-cloud-upload-fill"></i> Upload Study</a>
+    </div>
+    </form>
+
+    <!-- FLASH MESSAGES -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-wrap">
+        {% for category, message in messages %}
+        <div class="flash flash-{{ 'success' if category == 'success' else 'error' }}">
+            <span>{{ '✅' if category == 'success' else '⚠️' }}&nbsp;{{ message }}</span>
+            <button class="flash-close" onclick="this.parentElement.style.opacity='0';setTimeout(()=>this.parentElement.remove(),300);">&times;</button>
+        </div>
+        {% endfor %}
+    </div>
+    <script>setTimeout(()=>{ document.querySelectorAll('.flash').forEach(el=>{el.style.transition='opacity .3s';el.style.opacity='0';setTimeout(()=>el.remove(),300);}); },4000);</script>
+    {% endif %}
+    {% endwith %}
+
+    <!-- TABLE -->
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Received</th>
+                    <th>Patient</th>
+                    <th>Age/Sex</th>
+                    <th>Modality</th>
+                    <th>Incoming Desc</th>
+                    <th>Outgoing Desc</th>
+                    <th>Study Date</th>
+                    <th>Ref Physician</th>
+                    <th>History</th>
+                    <th>Progress</th>
+                    <th>Actions</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody id="study-table-body">
+                {% for s in studies %}
+                <tr id="row-{{ s.study_uid }}">
+                    {% include 'study_row.html' %}
+                </tr>
+                {% else %}
+                <tr><td colspan="12">
+                    <div class="empty-state">
+                        <div class="empty-state-ico"><i class="bi bi-inbox"></i></div>
+                        <div class="empty-state-title">No Studies Found</div>
+                        <div class="empty-state-sub">Studies will appear here once received by the DICOM server.</div>
+                    </div>
+                </td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- STATUS BAR -->
+    <div class="sbar">
+        <div class="sbar-live">
+            <div class="sbar-dot"></div>
+            <span id="activity-text">Initializing pipeline...</span>
+        </div>
+        <div class="sbar-right">
+            <span>© 2026 iCare. All rights reserved.</span>
+            <a href="/admin" class="sbar-admin">⚙ </a>
+        </div>
+    </div>
+
+</div><!-- /app-window -->
+
+
+<!-- MODAL: PHYSICIAN -->
+<div id="modalOverlay" class="m-overlay" onclick="closeEditModal()"></div>
+<div id="editPhysicianModal" class="modal" style="display:none;">
+    <div class="m-hdr">
+        <div class="m-title"><div class="m-ico"><i class="bi bi-person-badge"></i></div>Edit Referring Physician</div>
+        <button class="m-close" onclick="closeEditModal()"><i class="bi bi-x-lg"></i></button>
+    </div>
+    <div class="m-body">
+        <div class="fg">
+            <label class="flbl">Select Physician</label>
+            <select id="physicianSelect" class="fctrl" onchange="toggleNewPhysicianInput()"><option>Loading...</option></select>
+        </div>
+        <div id="newPhysicianContainer" class="add-phys" style="display:none;">
+            <div class="fg" style="margin-bottom:0;">
+                <label class="flbl">New Physician Name</label>
+                <input type="text" id="newPhysicianInput" class="fctrl" placeholder="e.g. DR. JOHN SMITH">
+            </div>
+        </div>
+        <input type="hidden" id="currentStudyUid">
+    </div>
+    <div class="m-ftr">
+        <button class="btn btn-ghost btn-sm" onclick="closeEditModal()">Cancel</button>
+        <button class="btn btn-purple btn-sm" onclick="savePhysician()"><i class="bi bi-check-lg"></i> Update</button>
+    </div>
+</div>
+
+<!-- MODAL: HISTORY -->
+<div id="historyModalOverlay" class="m-overlay" onclick="closeHistoryModal()"></div>
+<div id="editHistoryModal" class="modal" style="display:none;">
+    <div class="m-hdr">
+        <div class="m-title"><div class="m-ico"><i class="bi bi-file-medical"></i></div>Edit Clinical History</div>
+        <button class="m-close" onclick="closeHistoryModal()"><i class="bi bi-x-lg"></i></button>
+    </div>
+    <div class="m-body">
+        <div class="fg" style="margin-bottom:0;">
+            <label class="flbl">Clinical History &amp; Notes</label>
+            <textarea id="historyInput" class="fctrl" placeholder="Enter history, symptoms, clinical notes..."></textarea>
+        </div>
+        <input type="hidden" id="historyStudyUid">
+    </div>
+    <div class="m-ftr">
+        <button class="btn btn-ghost btn-sm" onclick="closeHistoryModal()">Cancel</button>
+        <button class="btn btn-purple btn-sm" onclick="saveHistory()"><i class="bi bi-check-lg"></i> Save</button>
+    </div>
+</div>
+
+<!-- MODAL: DESCRIPTION -->
+<div id="descModalOverlay" class="m-overlay" onclick="closeDescModal()"></div>
+<div id="editDescModal" class="modal" style="display:none;">
+    <div class="m-hdr">
+        <div class="m-title"><div class="m-ico"><i class="bi bi-tag-fill"></i></div>Map Official Description</div>
+        <button class="m-close" onclick="closeDescModal()"><i class="bi bi-x-lg"></i></button>
+    </div>
+    <div class="m-body">
+        <div class="fg" style="margin-bottom:0;">
+            <label class="flbl">Select Description(s)</label>
+            <div class="fsw" style="margin-bottom:8px;">
+                <i class="bi bi-search si"></i>
+                <input type="text" id="descSearchInput" class="fctrl" placeholder="Search descriptions..." onkeyup="filterDescriptions()">
+            </div>
+            <div id="descCheckboxList" class="cb-list">
+                <div style="color:var(--txt-mute);font-size:12px;padding:6px 4px;">Loading...</div>
+            </div>
+        </div>
+        <input type="hidden" id="descStudyUid">
+    </div>
+    <div class="m-ftr">
+        <button class="btn btn-ghost btn-sm" onclick="closeDescModal()">Cancel</button>
+        <button class="btn btn-purple btn-sm" onclick="saveDescription()"><i class="bi bi-check-lg"></i> Map &amp; Update</button>
+    </div>
+</div>
+
+
+<script>
+// ── LIVE TERMINAL
+function fetchLiveActivity(){
+    fetch('/api/activity').then(r=>r.ok?r.json():Promise.reject()).then(d=>{
+        const el=document.getElementById('activity-text');
+        if(el.innerText!==d.activity) el.innerText=d.activity;
+    }).catch(()=>{ document.getElementById('activity-text').innerText='Reconnecting...'; });
+}
+fetchLiveActivity(); setInterval(fetchLiveActivity,2000);
+
+// ── SSE
+const evtSource=new EventSource('/api/stream');
+evtSource.onmessage=function(e){
+    const data=JSON.parse(e.data);
+    if(data.action==='update_row'){
+        fetch(`/api/render_row/${data.study_uid}`).then(r=>r.status===200?r.text():Promise.reject()).then(html=>{
+            const ex=document.getElementById('row-'+data.study_uid);
+            if(ex){ ex.innerHTML=html; }
+            else{
+                const tbody=document.getElementById('study-table-body'),
+                      row=document.createElement('tr');
+                row.id='row-'+data.study_uid; row.innerHTML=html;
+                const empty=tbody.querySelector('td[colspan]'); if(empty) tbody.innerHTML='';
+                tbody.insertBefore(row,tbody.firstChild);
+            }
+        }).catch(e=>console.error('SSE row error:',e));
+    }
+};
+
+// ── MODAL HELPERS
+function _open(o,m){ document.getElementById(o).style.display='block'; const el=document.getElementById(m); el.style.display='flex'; }
+function _close(o,m){ document.getElementById(o).style.display='none'; document.getElementById(m).style.display='none'; }
+
+// ── PHYSICIAN
+function closeEditModal()            { _close('modalOverlay','editPhysicianModal'); }
+function openEditModal(uid,cur){
+    document.getElementById('currentStudyUid').value=uid;
+    const sel=document.getElementById('physicianSelect'),nc=document.getElementById('newPhysicianContainer'),ni=document.getElementById('newPhysicianInput');
+    nc.style.display='none'; ni.value=''; sel.innerHTML='<option>Loading...</option>';
+    fetch('/api/physicians/list').then(r=>r.json()).then(names=>{
+        sel.innerHTML='<option value="">— Select or Add —</option>';
+        names.forEach(n=>{ const o=document.createElement('option'); o.value=n; o.innerText=n; if(n===cur) o.selected=true; sel.appendChild(o); });
+        const a=document.createElement('option'); a.value='ADD_NEW_PHYSICIAN'; a.innerText='➕ Add New Physician...'; a.style.color='#9b7fff'; sel.appendChild(a);
+        if(cur&&!names.includes(cur)){ sel.value='ADD_NEW_PHYSICIAN'; nc.style.display='block'; ni.value=cur; }
+    });
+    _open('modalOverlay','editPhysicianModal');
+}
+function toggleNewPhysicianInput(){
+    const v=document.getElementById('physicianSelect').value,nc=document.getElementById('newPhysicianContainer'),ni=document.getElementById('newPhysicianInput');
+    if(v==='ADD_NEW_PHYSICIAN'){ nc.style.display='block'; ni.focus(); } else nc.style.display='none';
+}
+function savePhysician(){
+    const uid=document.getElementById('currentStudyUid').value,sel=document.getElementById('physicianSelect'),ni=document.getElementById('newPhysicianInput');
+    let name=sel.value==='ADD_NEW_PHYSICIAN'?ni.value.trim():sel.value;
+    if(!name){ alert('Please enter or select a physician name.'); return; }
+    fetch(`/api/patients/${uid}/update_physician`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({physician_name:name})})
+    .then(r=>r.json()).then(d=>{
+        if(d.success){ const el=document.getElementById('physician-text-'+uid); if(el) el.innerText=d.new_name||'None'; closeEditModal(); autoSyncToCloud(uid,'physician'); }
+        else alert('Error: '+d.error);
+    });
+}
+
+// ── HISTORY
+function closeHistoryModal()          { _close('historyModalOverlay','editHistoryModal'); }
+function openHistoryModal(uid,hist){
+    document.getElementById('historyStudyUid').value=uid;
+    document.getElementById('historyInput').value=hist||'';
+    _open('historyModalOverlay','editHistoryModal');
+    setTimeout(()=>document.getElementById('historyInput').focus(),50);
+}
+function saveHistory(){
+    const uid=document.getElementById('historyStudyUid').value,hist=document.getElementById('historyInput').value.trim();
+    const btn=document.querySelector('#editHistoryModal .btn-purple');
+    btn.innerHTML='<span class="spinner"></span> Saving...'; btn.disabled=true;
+    fetch(`/api/patients/${uid}/update_history`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({history:hist})})
+    .then(r=>r.json()).then(d=>{
+        if(d.success){ const el=document.getElementById('history-text-'+uid); if(el){el.innerHTML=d.new_history||'<span style="color:var(--txt-dim)">None</span>';el.title=d.new_history||'';} closeHistoryModal(); autoSyncToCloud(uid,'history'); }
+        else alert('Error: '+d.error);
+    }).finally(()=>{ btn.innerHTML='<i class="bi bi-check-lg"></i> Save'; btn.disabled=false; });
+}
+
+// ── DESCRIPTION
+function closeDescModal()             { _close('descModalOverlay','editDescModal'); }
+function openDescModal(uid,mod,curr){
+    document.getElementById('descStudyUid').value=uid;
+    document.getElementById('descSearchInput').value='';
+    const c=document.getElementById('descCheckboxList');
+    c.innerHTML='<div style="color:var(--txt-mute);font-size:12px;padding:6px 4px;">Loading...</div>';
+    const cur=curr?curr.split(',').map(s=>s.trim()):[];
+    fetch(`/api/descriptions/list?modality=${mod}`).then(r=>r.json()).then(rules=>{
+        c.innerHTML='';
+        if(!rules.length){ c.innerHTML=`<div style="color:var(--red);font-size:12px;padding:6px 4px;">No rules for ${mod}</div>`; return; }
+        rules.forEach(rule=>{
+            const lbl=document.createElement('label'); lbl.className='cb-item';
+            const cb=document.createElement('input'); cb.type='checkbox'; cb.value=rule.rule_id; cb.dataset.text=rule.description;
+            if(cur.includes(rule.description.trim())) cb.checked=true;
+            lbl.appendChild(cb); lbl.appendChild(document.createTextNode(rule.description)); c.appendChild(lbl);
+        });
+    });
+    _open('descModalOverlay','editDescModal');
+}
+function filterDescriptions(){
+    const f=document.getElementById('descSearchInput').value.toLowerCase();
+    document.querySelectorAll('#descCheckboxList .cb-item').forEach(el=>{ el.style.display=el.textContent.toLowerCase().includes(f)?'flex':'none'; });
+}
+function saveDescription(){
+    const uid=document.getElementById('descStudyUid').value,checked=Array.from(document.querySelectorAll('#descCheckboxList input:checked'));
+    if(!checked.length){ alert('Select at least one description.'); return; }
+    const ids=checked.map(c=>c.value).join(','),texts=checked.map(c=>c.dataset.text).join(', ');
+    const btn=document.querySelector('#editDescModal .btn-purple');
+    btn.innerHTML='<span class="spinner"></span> Mapping...'; btn.disabled=true;
+    fetch(`/api/patients/${uid}/update_outgoing_desc`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rule_id:ids,description:texts})})
+    .then(r=>r.json()).then(d=>{
+        if(d.success){ const el=document.getElementById('outgoing-desc-text-'+uid); if(el){el.innerHTML=d.new_description;el.title=d.new_description;} closeDescModal(); autoSyncToCloud(uid,'description'); }
+        else alert('Error: '+d.error);
+    }).finally(()=>{ btn.innerHTML='<i class="bi bi-check-lg"></i> Map & Update'; btn.disabled=false; });
+}
+
+// ── RETRY / PAUSE
+function retryUpload(uid){
+    const btn=document.getElementById('retry-btn-'+uid);
+    btn.innerHTML='<span class="spinner"></span>'; btn.disabled=true;
+    fetch(`/api/patients/${uid}/retry_upload`,{method:'POST',headers:{'Content-Type':'application/json'}})
+    .then(r=>r.json()).then(d=>{
+        if(d.success){ btn.innerHTML='🚀 Queued'; const sc=document.getElementById('status-cell-'+uid); if(sc) sc.innerHTML='<span class="badge b-upl"><span class="spinner"></span>Uploading</span>'; }
+        else{ alert('❌ '+d.error); btn.innerHTML='<i class="bi bi-arrow-clockwise"></i> Retry'; btn.disabled=false; }
+    });
+}
+function togglePause(uid){
+    fetch(`/api/patients/${uid}/toggle_pause`,{method:'POST',headers:{'Content-Type':'application/json'}})
+    .then(r=>r.json()).then(d=>{ if(!d.success) alert('Error: '+d.error); });
+}
+
+// ── AUTO SYNC
+function autoSyncToCloud(uid,type){
+    const el=document.getElementById('activity-text');
+    el.innerText='☁️ Syncing to central server...';
+    fetch(`/api/patients/${uid}/push_updates`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({update_type:type})})
+    .then(r=>r.json()).then(d=>{
+        if(d.success){ el.style.color='var(--green)'; el.innerText='✅ Synced!'; setTimeout(()=>{el.style.color='';fetchLiveActivity();},3000); }
+        else alert('Local save OK, sync failed: '+d.error);
+    });
+}
+</script>
+</body>
+</html>

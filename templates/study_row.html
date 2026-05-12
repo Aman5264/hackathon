@@ -1,0 +1,210 @@
+
+<td title="{{ s.last_received.strftime('%Y-%m-%d %H:%M:%S') if s.last_received else '' }}">
+    {% if s.last_received %}
+    <div style="font-family:var(--font-mono);line-height:1.35;">
+        <div style="font-size:12px;color:var(--txt-pri);font-weight:600;">{{ s.last_received.strftime('%d-%b-%Y') }}</div>
+        <div style="font-size:10.5px;color:var(--txt-mute);">{{ s.last_received.strftime('%H:%M:%S') }}</div>
+    </div>
+    {% else %}
+    <span style="color:var(--txt-dim);">—</span>
+    {% endif %}
+</td>
+
+
+<td title="{{ s.patient_name }} | {{ s.patient_id }}">
+    <div style="font-weight:700;font-size:13px;color:var(--txt-hi);line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px;">{{ s.patient_name or '—' }}</div>
+    <div style="font-family:var(--font-mono);font-size:10.5px;color:var(--txt-mute);margin-top:2px;">{{ s.patient_id or '' }}</div>
+</td>
+
+
+<td>
+    <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;">
+        {% if s.patient_age %}
+        <span style="font-family:var(--font-mono);font-size:12px;color:var(--txt-sec);background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:3px;padding:1px 6px;">{{ s.patient_age }}</span>
+        {% endif %}
+        {% if s.patient_sex %}
+        <span style="font-size:12px;font-weight:700;border-radius:3px;padding:1px 6px;
+            {% if s.patient_sex|upper == 'M' %}background:rgba(59,130,246,.12);color:#93c5fd;border:1px solid rgba(59,130,246,.25);
+            {% elif s.patient_sex|upper == 'F' %}background:rgba(244,114,182,.12);color:#f9a8d4;border:1px solid rgba(244,114,182,.25);
+            {% else %}background:rgba(255,255,255,.05);color:var(--txt-sec);border:1px solid var(--border);{% endif %}">
+            {{ s.patient_sex }}
+        </span>
+        {% endif %}
+        {% if not s.patient_age and not s.patient_sex %}<span style="color:var(--txt-dim);">—</span>{% endif %}
+    </div>
+</td>
+
+
+<td>
+    {% set mod = s.modality | upper if s.modality else '' %}
+    <span class="mod {{ 'mod-' + mod if mod in ['CT','MR','US','CR','DX'] else 'mod-def' }}">{{ mod or '—' }}</span>
+</td>
+
+
+<td title="{{ s.study_description }}">
+    <div style="font-size:12px;color:var(--txt-sec);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px;">
+        {{ s.study_description if s.study_description else '<span style="color:var(--txt-dim)">Blank</span>'|safe }}
+    </div>
+</td>
+
+
+<td>
+    <div style="display:flex;align-items:center;gap:5px;">
+        <div id="outgoing-desc-text-{{ s.study_uid }}"
+             style="font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px;
+                    color:{{ '#00cfff' if s.outgoing_description else 'var(--red)' }};"
+             title="{{ s.outgoing_description or 'Unmapped' }}">
+            {{ s.outgoing_description if s.outgoing_description else '<span style="font-size:11px;">⚠ Unmapped</span>'|safe }}
+        </div>
+        <button type="button" class="btn-icon"
+            data-uid="{{ s.study_uid }}"
+            data-modality="{{ s.modality }}"
+            data-desc="{{ s.outgoing_description | default('', true) | replace('\n',' ') | replace('\r','') | trim }}"
+            onclick="openDescModal(this.dataset.uid, this.dataset.modality, this.dataset.desc)"
+            title="Edit Description">
+            <i class="bi bi-pencil-square"></i>
+        </button>
+    </div>
+</td>
+
+
+<td>
+    <span style="font-family:var(--font-mono);font-size:12px;color:var(--txt-sec);">
+        {{ s.study_date or '<span style="color:var(--txt-dim)">—</span>'|safe }}
+    </span>
+</td>
+
+
+<td>
+    <div style="display:flex;align-items:center;gap:5px;">
+        <span id="physician-text-{{ s.study_uid }}"
+              style="font-size:12px;color:var(--txt-sec);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:110px;"
+              title="{{ s.ref_physician_name or 'None' }}">
+            {{ s.ref_physician_name if s.ref_physician_name else '<span style="color:var(--txt-dim)">None</span>'|safe }}
+        </span>
+        <button type="button" class="btn-icon"
+            onclick="openEditModal('{{ s.study_uid }}', '{{ s.ref_physician_name or '' }}')"
+            title="Edit Physician">
+            <i class="bi bi-pencil-square"></i>
+        </button>
+    </div>
+</td>
+
+
+<td>
+    <div style="display:flex;align-items:center;gap:5px;">
+        <div id="history-text-{{ s.study_uid }}"
+             style="font-size:12px;color:var(--txt-sec);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100px;"
+             title="{{ s.patient_history or 'No history' }}">
+            {{ s.patient_history if s.patient_history else '<span style="color:var(--txt-dim)">None</span>'|safe }}
+        </div>
+        <button type="button" class="btn-icon"
+            data-history="{{ s.patient_history or '' }}"
+            onclick="openHistoryModal('{{ s.study_uid }}', this.getAttribute('data-history'))"
+            title="Edit History">
+            <i class="bi bi-pencil-square"></i>
+        </button>
+    </div>
+</td>
+
+
+<td>
+    {% set total    = s.image_count if s.image_count and s.image_count > 0 else 1 %}
+    {% set up_count = [s.uploaded_image_count if s.uploaded_image_count else 0, total] | min %}
+
+    <div class="p-wrap">
+    {% if s.ui_status == 'Receiving' %}
+        <div class="p-lbl">
+            <span style="color:var(--amber);display:flex;align-items:center;gap:4px;"><i class="bi bi-broadcast" style="font-size:10px;"></i>Live</span>
+            <span>{{ s.image_count }} imgs</span>
+        </div>
+        <div class="p-track p-stream">
+            <div class="p-stream-bar"></div>
+        </div>
+    {% else %}
+        {% set pct = ((up_count / total) * 100) | round(0) | int %}
+        {% set done = (pct == 100) %}
+        <div class="p-lbl">
+            <span>{{ up_count }}/{{ s.image_count }}</span>
+            <span class="{{ 'p-pct-done' if done else 'p-pct-wip' }}">{{ pct }}%</span>
+        </div>
+        <div class="p-track">
+            <div class="{{ 'p-fill-done' if done else 'p-fill-wip' }}" style="width:{{ pct }}%;"></div>
+        </div>
+    {% endif %}
+    </div>
+</td>
+
+
+<td>
+    <div style="display:flex;flex-direction:column;gap:4px;min-width:90px;">
+
+        {% if s.ui_status in ['Network Paused', 'Failed'] or s.remote_upload_id == 'UNMAPPED_CENTER' %}
+        <button type="button" class="btn btn-amber-ghost btn-xs"
+                id="retry-btn-{{ s.study_uid }}"
+                onclick="retryUpload('{{ s.study_uid }}')"
+                style="width:100%;justify-content:center;">
+            <i class="bi bi-arrow-clockwise"></i> Retry
+        </button>
+        {% endif %}
+
+        <button onclick="togglePause('{{ s.study_uid }}')"
+                class="btn btn-ghost btn-xs"
+                style="width:100%;justify-content:center;">
+            {% if s.is_paused %}
+                <i class="bi bi-play-fill" style="color:var(--green);"></i> Resume
+            {% else %}
+                <i class="bi bi-pause-fill" style="color:var(--amber);"></i> Pause
+            {% endif %}
+        </button>
+
+        <a href="/delete/{{ s.study_uid }}"
+           class="btn btn-red-ghost btn-xs"
+           style="width:100%;justify-content:center;"
+           onclick="return confirm('Permanently delete this study?');">
+            <i class="bi bi-trash3-fill"></i> Delete
+        </a>
+
+    </div>
+</td>
+
+
+<td id="status-cell-{{ s.study_uid }}">
+
+    {% if s.remote_upload_id == 'UNMAPPED_CENTER' %}
+        <div class="b-blk">
+            <div class="bt"><i class="bi bi-exclamation-triangle-fill"></i> Blocked</div>
+            <div class="bb">Map <strong>"{{ s.institution_name }}"</strong> in Settings to continue.</div>
+        </div>
+
+    {% else %}
+        {% set status = s.ui_status %}
+
+        {% if status == 'Receiving' %}
+            <span class="badge b-rcv"><span class="spinner"></span>Receiving</span>
+
+        {% elif status == 'Network Paused' %}
+            <span class="badge b-ntp"><i class="bi bi-wifi-off"></i>Net Paused</span>
+
+        {% elif 'Paused' in status %}
+            <span class="badge b-paus"><i class="bi bi-pause-circle-fill"></i>Paused</span>
+
+        {% elif status in ['Processing', 'Streaming'] %}
+            <span class="badge b-proc"><span class="spinner"></span>{{ status }}</span>
+
+        {% elif status == 'Uploading' %}
+            <span class="badge b-upl"><span class="spinner"></span>Uploading</span>
+
+        {% elif status == 'Uploaded' %}
+            <span class="badge b-up"><i class="bi bi-check-circle-fill"></i>Uploaded</span>
+
+        {% elif status == 'Failed' %}
+            <span class="badge b-fail"><i class="bi bi-x-circle-fill"></i>Failed</span>
+
+        {% else %}
+            <span class="badge b-paus">{{ status }}</span>
+        {% endif %}
+
+    {% endif %}
+
+</td>

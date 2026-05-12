@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upload DICOM — iCare Dicom Uploader</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+
+    <style>
+    :root {
+        --bg-root:      #08071a;
+        --bg-app:       #0d0c22;
+        --bg-titlebar:  #130f32;
+        --bg-toolbar:   #100e28;
+        --bg-card:      #111029;
+        --bg-card-deep: #0c0b20;
+        --bg-input:     #0a091f;
+
+        --border:       rgba(120,100,255,0.15);
+        --border-hi:    rgba(140,120,255,0.30);
+        --border-drop:  rgba(124,92,252,0.35);
+
+        --purple:       #7c5cfc;
+        --purple-lt:    #9b7fff;
+        --purple-dim:   rgba(124,92,252,0.15);
+        --purple-glow:  rgba(124,92,252,0.25);
+
+        --green:        #00e676;
+        --green-dim:    rgba(0,230,118,0.12);
+        --green-glow:   rgba(0,230,118,0.25);
+        --amber:        #ffb300;
+        --amber-dim:    rgba(255,179,0,0.12);
+        --red:          #ff4d6d;
+        --red-dim:      rgba(255,77,109,0.12);
+        --cyan:         #00cfff;
+
+        --txt-hi:    #ffffff;
+        --txt-pri:   #d4cfff;
+        --txt-sec:   #9590c8;
+        --txt-mute:  #5e5a8a;
+        --txt-dim:   #35315a;
+
+        --font-ui:   'Rajdhani', sans-serif;
+        --font-mono: 'Share Tech Mono', monospace;
+
+        --r-sm: 4px;
+        --r-md: 8px;
+        --r-lg: 12px;
+        --r-xl: 18px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { font-size: 14px; }
+
+    body {
+        font-family: var(--font-ui);
+        background: var(--bg-root);
+        color: var(--txt-pri);
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        background-image:
+            radial-gradient(ellipse 70% 50% at 50% -10%, rgba(124,92,252,0.07) 0%, transparent 70%),
+            radial-gradient(ellipse 40% 40% at 80% 80%, rgba(0,207,255,0.03) 0%, transparent 60%);
+    }
+
+    /* ── APP WINDOW ── */
+    .app-window {
+        max-width: 1800px;
+        margin: 0 auto;
+        width: 100%;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        border-left: 1px solid var(--border);
+        border-right: 1px solid var(--border);
+    }
+
+    /* ── TITLE BAR ── */
+    .titlebar {
+        background: linear-gradient(90deg, #1a1245 0%, #120f32 50%, #1a1245 100%);
+        border-bottom: 1px solid var(--border-hi);
+        padding: 0 20px;
+        height: 44px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-shrink: 0;
+        box-shadow: 0 2px 16px rgba(0,0,0,0.6);
+    }
+    .app-logo { font-size: 19px; font-weight: 700; letter-spacing: 0.05em; color: var(--txt-hi); text-transform: uppercase; }
+    .app-logo span { color: var(--purple-lt); }
+
+    .titlebar-center {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--txt-mute);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .titlebar-center i { color: var(--purple-lt); font-size: 14px; }
+
+    .titlebar-right { display: flex; align-items: center; gap: 8px; }
+    .status-dot {
+        width: 9px; height: 9px; border-radius: 50%;
+        background: var(--green);
+        box-shadow: 0 0 8px var(--green), 0 0 16px rgba(0,230,118,0.4);
+        animation: pdot 2.5s ease-in-out infinite;
+    }
+    @keyframes pdot {
+        0%,100%{ opacity:1; box-shadow:0 0 8px var(--green),0 0 16px rgba(0,230,118,0.4); }
+        50%    { opacity:0.5; box-shadow:0 0 4px var(--green); }
+    }
+    .status-lbl { font-size: 12px; font-weight: 700; color: var(--green); letter-spacing: 0.05em; text-transform: uppercase; }
+
+    /* ── SUB-TOOLBAR ── */
+    .sub-toolbar {
+        background: var(--bg-toolbar);
+        border-bottom: 2px solid var(--purple);
+        padding: 8px 20px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        box-shadow: 0 2px 12px rgba(124,92,252,0.15);
+    }
+    .breadcrumb {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12.5px;
+        font-weight: 600;
+    }
+    .breadcrumb a {
+        color: var(--txt-mute);
+        text-decoration: none;
+        transition: color 0.15s;
+    }
+    .breadcrumb a:hover { color: var(--purple-lt); }
+    .breadcrumb-sep { color: var(--txt-dim); font-size: 11px; }
+    .breadcrumb-cur { color: var(--txt-pri); }
+
+    /* ── MAIN CONTENT ── */
+    .content {
+        flex: 1;
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        padding: 40px 20px 60px;
+    }
+
+    /* ── UPLOAD CARD ── */
+    .upload-card {
+        width: 100%;
+        max-width: 560px;
+        background: var(--bg-card);
+        border: 1px solid var(--border-hi);
+        border-radius: var(--r-xl);
+        overflow: hidden;
+        box-shadow: 0 8px 40px rgba(0,0,0,0.6), 0 0 60px rgba(124,92,252,0.06);
+    }
+
+    .card-header {
+        padding: 22px 26px 18px;
+        border-bottom: 1px solid var(--border);
+        background: rgba(124,92,252,0.07);
+        display: flex;
+        align-items: center;
+        gap: 14px;
+    }
+
+    .card-header-icon {
+        width: 46px; height: 46px;
+        background: linear-gradient(135deg, rgba(124,92,252,0.3), rgba(0,207,255,0.15));
+        border: 1px solid var(--border-hi);
+        border-radius: var(--r-md);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 22px;
+        color: var(--purple-lt);
+        flex-shrink: 0;
+        box-shadow: 0 0 20px rgba(124,92,252,0.2);
+    }
+
+    .card-header-text {}
+    .card-title {
+        font-size: 18px;
+        font-weight: 700;
+        color: var(--txt-hi);
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+        line-height: 1.2;
+    }
+    .card-subtitle {
+        font-size: 12.5px;
+        color: var(--txt-mute);
+        margin-top: 3px;
+        font-weight: 500;
+    }
+
+    .card-body { padding: 26px; }
+
+    /* ── INFO BAR ── */
+    .info-bar {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        background: var(--purple-dim);
+        border: 1px solid rgba(124,92,252,0.25);
+        border-radius: var(--r-md);
+        padding: 12px 14px;
+        margin-bottom: 22px;
+        font-size: 12.5px;
+        color: var(--txt-sec);
+        line-height: 1.55;
+    }
+    .info-bar i { color: var(--purple-lt); font-size: 15px; margin-top: 1px; flex-shrink: 0; }
+
+    /* ── DROP ZONE ── */
+    .drop-zone {
+        border: 2px dashed var(--border-drop);
+        border-radius: var(--r-lg);
+        background: var(--bg-card-deep);
+        padding: 32px 20px;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        position: relative;
+        margin-bottom: 20px;
+    }
+    .drop-zone:hover,
+    .drop-zone.drag-over {
+        border-color: var(--purple);
+        background: var(--purple-dim);
+        box-shadow: 0 0 0 3px var(--purple-dim), inset 0 0 30px rgba(124,92,252,0.05);
+    }
+
+    .drop-icon {
+        font-size: 38px;
+        color: var(--purple-lt);
+        margin-bottom: 10px;
+        display: block;
+        opacity: 0.8;
+        transition: transform 0.2s;
+    }
+    .drop-zone:hover .drop-icon { transform: translateY(-3px); opacity: 1; }
+
+    .drop-title {
+        font-size: 15px;
+        font-weight: 700;
+        color: var(--txt-pri);
+        margin-bottom: 5px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }
+    .drop-sub {
+        font-size: 12px;
+        color: var(--txt-mute);
+        margin-bottom: 14px;
+    }
+
+    /* 🚨 THE FIX: Added z-index to guarantee it intercepts drops! */
+    #dicomInput {
+        position: absolute;
+        inset: 0;
+        opacity: 0;
+        cursor: pointer;
+        width: 100%;
+        height: 100%;
+        font-size: 0;
+        z-index: 10; 
+    }
+
+    .drop-browse-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: var(--purple-dim);
+        border: 1px solid var(--border-hi);
+        border-radius: var(--r-sm);
+        color: var(--purple-lt);
+        font-family: var(--font-ui);
+        font-size: 13px;
+        font-weight: 700;
+        padding: 7px 18px;
+        pointer-events: none; /* click handled by the file input above */
+        letter-spacing: 0.03em;
+    }
+
+    /* ── FILE PREVIEW ── */
+    #file-preview {
+        display: none;
+        background: var(--bg-input);
+        border: 1px solid var(--border);
+        border-radius: var(--r-md);
+        padding: 14px 16px;
+        margin-bottom: 20px;
+    }
+
+    .preview-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+    }
+    .preview-title {
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+        color: var(--txt-mute);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .preview-title i { color: var(--green); }
+
+    .preview-count {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--green);
+        background: var(--green-dim);
+        border: 1px solid rgba(0,230,118,0.2);
+        border-radius: 20px;
+        padding: 2px 10px;
+        font-weight: 600;
+    }
+
+    .preview-list {
+        max-height: 130px;
+        overflow-y: auto;
+        scrollbar-width: thin;
+        scrollbar-color: var(--border-hi) transparent;
+    }
+    .preview-list::-webkit-scrollbar { width: 4px; }
+    .preview-list::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 4px; }
+
+    .preview-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 0;
+        font-family: var(--font-mono);
+        font-size: 11.5px;
+        color: var(--txt-sec);
+        border-bottom: 1px solid var(--border);
+    }
+    .preview-item:last-child { border-bottom: none; }
+    .preview-item i { color: var(--purple-lt); font-size: 12px; flex-shrink: 0; }
+    .preview-item .pname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+    .preview-item .psize { color: var(--txt-dim); flex-shrink: 0; }
+
+    /* ── PROGRESS BAR ── */
+    #progress-section {
+        display: none;
+        margin-bottom: 20px;
+    }
+
+    .prog-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 8px;
+    }
+    .prog-label {
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--txt-mute);
+    }
+    .prog-counter {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--cyan);
+    }
+
+    .prog-track {
+        background: rgba(255,255,255,0.06);
+        border-radius: 4px;
+        height: 8px;
+        overflow: hidden;
+        margin-bottom: 8px;
+    }
+    .prog-fill {
+        background: linear-gradient(90deg, #7c5cfc, #00cfff);
+        height: 100%;
+        border-radius: 4px;
+        width: 0%;
+        transition: width 0.3s ease;
+        box-shadow: 0 0 10px rgba(0,207,255,0.3);
+    }
+    .prog-fill.done {
+        background: linear-gradient(90deg, #00e676, #00b050);
+        box-shadow: 0 0 10px rgba(0,230,118,0.4);
+    }
+    .prog-fill.has-error {
+        background: linear-gradient(90deg, #ff4d6d, #cc3a55);
+        box-shadow: 0 0 10px rgba(255,77,109,0.3);
+    }
+
+    #status-msg {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--txt-sec);
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        min-height: 20px;
+    }
+
+    /* ── SUBMIT BUTTON ── */
+    .submit-btn {
+        width: 100%;
+        height: 46px;
+        background: linear-gradient(135deg, #7c5cfc 0%, #5a3de8 100%);
+        color: #fff;
+        border: none;
+        border-radius: var(--r-md);
+        font-family: var(--font-ui);
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 9px;
+        transition: all 0.18s ease;
+        box-shadow: 0 4px 20px rgba(124,92,252,0.35);
+    }
+    .submit-btn:hover:not(:disabled) {
+        filter: brightness(1.12);
+        box-shadow: 0 6px 28px rgba(124,92,252,0.5);
+        transform: translateY(-1px);
+    }
+    .submit-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        transform: none;
+        box-shadow: none;
+    }
+
+    /* ── RESULT BANNER ── */
+    #result-banner {
+        display: none;
+        align-items: center;
+        gap: 10px;
+        padding: 13px 16px;
+        border-radius: var(--r-md);
+        font-size: 13.5px;
+        font-weight: 600;
+        margin-top: 16px;
+    }
+    .banner-success { background: var(--green-dim); border: 1px solid rgba(0,230,118,.3); color: #6effc7; }
+    .banner-warning { background: var(--amber-dim);  border: 1px solid rgba(255,179,0,.3); color: #ffd54f; }
+    .banner-error   { background: var(--red-dim);    border: 1px solid rgba(255,77,109,.3); color: #ff8fa0; }
+
+    /* ── SPINNER ── */
+    .spinner {
+        display: inline-block;
+        width: 14px; height: 14px;
+        border: 2px solid currentColor;
+        border-right-color: transparent;
+        border-radius: 50%;
+        animation: spin 0.6s linear infinite;
+        flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── STATS ROW ── */
+    .stats-row {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+        margin-top: 22px;
+    }
+    .stat-item {
+        background: var(--bg-card-deep);
+        border: 1px solid var(--border);
+        border-radius: var(--r-md);
+        padding: 12px 10px;
+        text-align: center;
+    }
+    .stat-val {
+        font-family: var(--font-mono);
+        font-size: 22px;
+        font-weight: 700;
+        line-height: 1.1;
+        margin-bottom: 4px;
+    }
+    .stat-label {
+        font-size: 10.5px;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+        color: var(--txt-mute);
+        font-weight: 600;
+    }
+    .sv-total   { color: var(--cyan); }
+    .sv-ok      { color: var(--green); }
+    .sv-fail    { color: var(--red); }
+
+    /* ── STATUS BAR ── */
+    .sbar {
+        background: var(--bg-titlebar);
+        border-top: 1px solid var(--border-hi);
+        padding: 6px 20px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-shrink: 0;
+        gap: 8px;
+    }
+    .sbar-left { font-size: 11.5px; color: var(--txt-dim); font-family: var(--font-mono); }
+    .sbar-right { display: flex; align-items: center; gap: 10px; }
+    .sbar-link {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--txt-mute);
+        text-decoration: none;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        padding: 4px 10px;
+        border: 1px solid var(--border);
+        border-radius: var(--r-sm);
+        transition: all 0.15s;
+    }
+    .sbar-link:hover { color: var(--purple-lt); border-color: var(--border-hi); background: var(--purple-dim); }
+
+    /* ── RESPONSIVE ── */
+    @media (max-width: 600px) {
+        .titlebar { padding: 0 12px; }
+        .titlebar-center { display: none; }
+        .sub-toolbar { padding: 8px 12px; }
+        .content { padding: 20px 12px 40px; }
+        .card-header { padding: 16px 18px; }
+        .card-body { padding: 18px; }
+        .stats-row { grid-template-columns: repeat(3, 1fr); }
+        .stat-val { font-size: 18px; }
+    }
+    </style>
+</head>
+
+<body>
+<div class="app-window">
+
+    <!-- TITLE BAR -->
+    <div class="titlebar">
+        <div class="app-logo">i<span>Care</span> Dicom Uploader</div>
+        <div class="titlebar-center">
+            <i class="bi bi-cloud-upload-fill"></i>
+            Manual DICOM Upload
+        </div>
+        <div class="titlebar-right">
+            <div class="status-dot"></div>
+            <span class="status-lbl">Receiver</span>
+        </div>
+    </div>
+
+    <!-- SUB TOOLBAR -->
+    <div class="sub-toolbar">
+        <div class="breadcrumb">
+            <a href="/"><i class="bi bi-grid-fill"></i>&nbsp;Dashboard</a>
+            <span class="breadcrumb-sep"><i class="bi bi-chevron-right"></i></span>
+            <span class="breadcrumb-cur">Upload Study</span>
+        </div>
+    </div>
+
+    <!-- MAIN CONTENT -->
+    <div class="content">
+        <div class="upload-card">
+
+            <!-- CARD HEADER -->
+            <div class="card-header">
+                <div class="card-header-icon">
+                    <i class="bi bi-folder2-open"></i>
+                </div>
+                <div class="card-header-text">
+                    <div class="card-title">Manual DICOM Upload</div>
+                    <div class="card-subtitle">Select a folder containing DICOM study files</div>
+                </div>
+            </div>
+
+            <!-- CARD BODY -->
+            <div class="card-body">
+
+                <!-- INFO BAR -->
+                <div class="info-bar">
+                    <i class="bi bi-info-circle-fill"></i>
+                    <span>Select the root study folder. All sub-folders are scanned automatically. System files like <code style="color:var(--cyan);font-family:var(--font-mono);font-size:11px;">.DS_Store</code>, <code style="color:var(--cyan);font-family:var(--font-mono);font-size:11px;">Thumbs.db</code> are filtered out.</span>
+                </div>
+
+                <form id="uploadForm" enctype="multipart/form-data">
+
+                    <!-- DROP ZONE -->
+                    <div class="drop-zone" id="dropZone">
+                        <input type="file" id="dicomInput" name="dicom_files" webkitdirectory directory multiple required>
+                        <i class="bi bi-folder2-open drop-icon"></i>
+                        <div class="drop-title">Choose DICOM Folder</div>
+                        <div class="drop-sub">Scans all nested sub-folders automatically</div>
+                        <div class="drop-browse-btn">
+                            <i class="bi bi-folder-symlink-fill"></i> Browse Folder
+                        </div>
+                    </div>
+
+                    <!-- FILE PREVIEW -->
+                    <div id="file-preview">
+                        <div class="preview-header">
+                            <div class="preview-title"><i class="bi bi-check-circle-fill"></i> Files Ready</div>
+                            <span class="preview-count" id="preview-count">0 files</span>
+                        </div>
+                        <div class="preview-list" id="preview-list"></div>
+                    </div>
+
+                    <!-- PROGRESS SECTION -->
+                    <div id="progress-section">
+                        <div class="prog-header">
+                            <div class="prog-label">Upload Progress</div>
+                            <div class="prog-counter" id="prog-counter">0 / 0</div>
+                        </div>
+                        <div class="prog-track">
+                            <div class="prog-fill" id="prog-fill"></div>
+                        </div>
+                        <div id="status-msg">
+                            <span class="spinner"></span>
+                            <span id="status-text">Preparing...</span>
+                        </div>
+                    </div>
+
+                    <!-- SUBMIT -->
+                    <button type="submit" class="submit-btn" id="uploadBtn">
+                        <i class="bi bi-cloud-upload-fill"></i> Upload &amp; Process
+                    </button>
+
+                    <!-- RESULT BANNER -->
+                    <div id="result-banner"></div>
+
+                    <!-- STATS -->
+                    <div class="stats-row" id="stats-row" style="display:none;">
+                        <div class="stat-item">
+                            <div class="stat-val sv-total" id="sv-total">0</div>
+                            <div class="stat-label">Total Files</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-val sv-ok" id="sv-ok">0</div>
+                            <div class="stat-label">Processed</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-val sv-fail" id="sv-fail">0</div>
+                            <div class="stat-label">Failed</div>
+                        </div>
+                    </div>
+
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- STATUS BAR -->
+    <div class="sbar">
+        <div class="sbar-left">iCare DICOM Gateway — Upload Module</div>
+        <div class="sbar-right">
+            <a href="/" class="sbar-link"><i class="bi bi-arrow-left"></i> Back to Dashboard</a>
+        </div>
+    </div>
+
+</div>
+
+<script>
+    const form      = document.getElementById('uploadForm');
+    const fileInput = document.getElementById('dicomInput');
+    const btn       = document.getElementById('uploadBtn');
+    const dropZone  = document.getElementById('dropZone');
+
+    // ── FILE PREVIEW WHEN USER PICKS A FOLDER ──────────────────
+    fileInput.addEventListener('change', function() {
+        const raw = fileInput.files;
+        const valid = filterFiles(raw);
+
+        const preview    = document.getElementById('file-preview');
+        const countEl    = document.getElementById('preview-count');
+        const listEl     = document.getElementById('preview-list');
+
+        if (valid.length === 0) { preview.style.display = 'none'; return; }
+
+        preview.style.display = 'block';
+        countEl.innerText = valid.length + ' file' + (valid.length !== 1 ? 's' : '');
+        listEl.innerHTML = '';
+
+        // Show first 30 files
+        const show = Math.min(valid.length, 30);
+        for (let i = 0; i < show; i++) {
+            const f = valid[i];
+            const item = document.createElement('div');
+            item.className = 'preview-item';
+            item.innerHTML = `
+                <i class="bi bi-file-earmark-medical"></i>
+                <span class="pname">${f.webkitRelativePath || f.name}</span>
+                <span class="psize">${formatBytes(f.size)}</span>
+            `;
+            listEl.appendChild(item);
+        }
+        if (valid.length > 30) {
+            const more = document.createElement('div');
+            more.className = 'preview-item';
+            more.innerHTML = `<i class="bi bi-three-dots"></i><span class="pname" style="color:var(--txt-mute)">...and ${valid.length - 30} more files</span>`;
+            listEl.appendChild(more);
+        }
+    });
+
+    // 🚨 THE FIX: Listen directly on the input so native browser drop parsing works!
+    fileInput.addEventListener('dragenter', () => dropZone.classList.add('drag-over'));
+    fileInput.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+    fileInput.addEventListener('drop',      () => dropZone.classList.remove('drag-over'));
+
+    // ── SUBMIT ──────────────────────────────────────────────────
+    form.onsubmit = async function(e) {
+        e.preventDefault();
+
+        const raw   = fileInput.files;
+        const valid = filterFiles(raw);
+
+        if (valid.length === 0) {
+            showBanner('error', 'bi-exclamation-triangle-fill', 'No valid DICOM files found in the selected folder.');
+            return;
+        }
+
+        // Show progress
+        document.getElementById('progress-section').style.display = 'block';
+        document.getElementById('stats-row').style.display = 'grid';
+        document.getElementById('sv-total').innerText = valid.length;
+        btn.disabled = true;
+
+        let ok = 0, fail = 0;
+
+        for (let i = 0; i < valid.length; i++) {
+            setProgress(i, valid.length, `Processing file ${i + 1} of ${valid.length}...`);
+
+            const fd = new FormData();
+            fd.append('dicom_files', valid[i]);
+
+            try {
+                const res  = await fetch('/upload', { method: 'POST', body: fd, headers: { 'Accept': 'application/json' } });
+                const data = await res.json();
+                if (data.success) { ok += data.processed; }
+                else              { fail++; console.error('Rejected:', data.errors); }
+            } catch (err) {
+                fail++;
+                console.error('Network error for file:', valid[i].name);
+            }
+
+            document.getElementById('sv-ok').innerText   = ok;
+            document.getElementById('sv-fail').innerText = fail;
+        }
+
+        // Done
+        setProgress(valid.length, valid.length, null);
+        document.getElementById('prog-fill').classList.add(fail > 0 ? 'has-error' : 'done');
+
+        if (fail > 0) {
+            document.getElementById('prog-fill').classList.add('has-error');
+            showBanner('warning', 'bi-exclamation-triangle-fill',
+                `Upload complete — ${ok} processed, ${fail} failed/invalid. Redirecting to dashboard...`);
+        } else {
+            showBanner('success', 'bi-check-circle-fill',
+                `All ${ok} files processed successfully! Redirecting to dashboard...`);
+        }
+
+        setTimeout(() => { window.location.href = '/'; }, 2500);
+    };
+
+    // ── HELPERS ─────────────────────────────────────────────────
+    function filterFiles(rawFiles) {
+        const out = [];
+        for (let i = 0; i < rawFiles.length; i++) {
+            const n = rawFiles[i].name;
+            if (!n.startsWith('.') && n !== 'Thumbs.db' && n !== 'desktop.ini') out.push(rawFiles[i]);
+        }
+        return out;
+    }
+
+    function setProgress(done, total, text) {
+        const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+        document.getElementById('prog-fill').style.width    = pct + '%';
+        document.getElementById('prog-counter').innerText   = `${done} / ${total}`;
+        const msgEl = document.getElementById('status-msg');
+        if (text) {
+            msgEl.innerHTML = `<span class="spinner"></span><span id="status-text">${text}</span>`;
+        } else {
+            msgEl.innerHTML = `<i class="bi bi-check-circle-fill" style="color:var(--green);"></i><span id="status-text" style="color:var(--green);">Processing complete!</span>`;
+        }
+    }
+
+    function showBanner(type, icon, msg) {
+        const el = document.getElementById('result-banner');
+        el.className = 'banner-' + type;
+        el.innerHTML = `<i class="bi ${icon}"></i> ${msg}`;
+        el.style.display = 'flex';
+    }
+
+    function formatBytes(bytes) {
+        if (bytes < 1024)       return bytes + ' B';
+        if (bytes < 1048576)    return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / 1048576).toFixed(1) + ' MB';
+    }
+</script>
+
+</body>
+</html>

@@ -1,0 +1,19 @@
+# Environment variables (secrets)
+.env
+readme.txt
+
+# Runtime folders
+Incoming/
+Outbound_Data/
+instance/
+error_data/
+logs/
+Data_Backup/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Logs
+*.log
