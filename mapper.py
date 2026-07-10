@@ -1,7 +1,7 @@
 import requests
 import datetime
 from config import Config
-from database import db, DescriptionRule, DescriptionMapping, SystemSetting
+from core.database import db, DescriptionRule, DescriptionMapping, SystemSetting
 from logger import get_enterprise_logger
 
 log = get_enterprise_logger("MetadataMapper")

@@ -1,7 +1,7 @@
 import os
 from dotenv import load_dotenv
 from logger import get_enterprise_logger
-from database import get_system_setting
+from core.database import get_system_setting
 
 log = get_enterprise_logger("ConfigValidator")
 
@@ -13,9 +13,12 @@ class Config:
     SECRET_KEY = os.environ.get('FLASK_SECRET_KEY', 'default-dev-key')
     # ADMIN_PASSWORD = os.environ.get('CLINIC_ADMIN_PASSWORD', 'admin1')
     DICOM_PORT = int(get_system_setting('DICOM_PORT', 11114))
-    INCOMING_FOLDER = os.environ.get('INCOMING_FOLDER', 'Incoming')
+    INCOMING_FOLDER = os.environ.get('INCOMING_FOLDER', 'data/incoming')
+    PROCESSING_FOLDER = os.environ.get('PROCESSING_FOLDER', 'data/processing')
+    OUTGOING_FOLDER = os.environ.get('OUTGOING_FOLDER', 'data/outgoing')
+    ARCHIVE_FOLDER = os.environ.get('ARCHIVE_FOLDER', 'data/archive')
     MAX_CONNECTIONS = int(get_system_setting('MAX_CONCURRENT_CONNECTIONS', 10))
-    BACKUP_FOLDER =  os.environ.get('BACKUP_FOLDER', 'Data_Backup')
+    BACKUP_FOLDER =  os.environ.get('BACKUP_FOLDER', 'data/backup')
     SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URI', 'sqlite:///dicom_data.db')
     DICOM_AE_TITLE =  get_system_setting('DICOM_AE_TITLE', 'ICARE_STORE')
     HOST =  get_system_setting('HOST', '0.0.0.0')
@@ -54,6 +57,12 @@ class Config:
     TUS_API_URL = get_system_setting('TUS_API_URL', 'http://127.0.0.1:1080/files/')
     TUS_API_KEY = get_system_setting('TUS_API_KEY', '')
 
+    # --- THREADING & CONCURRENCY LIMITS ---
+    from systemProfile import SystemProfile
+    WAITRESS_THREADS = int(os.environ.get('WAITRESS_THREADS', 16))
+    COMPRESSION_WORKERS = int(get_system_setting('COMPRESSION_WORKERS', SystemProfile.get_optimal_threads('CPU')))
+    UPLOAD_WORKERS = int(get_system_setting('UL_WORKERS', SystemProfile.get_optimal_threads('IO')))
+    ZIP_MODE = get_system_setting('ZIP_MODE', 'STORED') # STORED or DEFLATED
     @classmethod
     def validate(cls):
         """The Bouncer: Runs once at startup to enforce security rules."""

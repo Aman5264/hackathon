@@ -1,89 +1,34 @@
+import threading
+import time
 import os
 import requests
-from database import db, PatientStudy, SystemSetting, DescriptionMapping, DescriptionRule, InstitutionMapping
+from datetime import datetime
+from core.database import db, db_lock, PatientStudy, SystemSetting, DescriptionMapping, DescriptionRule, InstitutionMapping
 from logger import get_enterprise_logger
 from config import Config
-import json
+from mapper import get_mapped_rule
 
-from datetime import datetime
-
-log = get_enterprise_logger("API_Client")
-
-def get_mapped_rule(machine_desc: str, modality: str):
-    """
-    Looks up official rules. Updated to support multiple comma-separated rules.
-    """
-    if not machine_desc: 
-        return None, None
-        
-    # 1. Check for custom mappings (Can be multiple!)
-    custom_maps = DescriptionMapping.query.filter_by(machine_description=machine_desc).all()
-    if custom_maps:
-        # Join multiple IDs and Descriptions with commas
-        rule_ids = ",".join([m.rule_id for m in custom_maps if m.rule])
-        official_descs = ", ".join([m.rule.original_description for m in custom_maps if m.rule])
-        
-        if rule_ids: 
-            return rule_ids, official_descs
-            
-    # 2. Exact match fallback (Now supports multiple!)
-    exact_rules = DescriptionRule.query.filter_by(
-        original_description=machine_desc, 
-        modality=modality
-    ).all()
-
-    if exact_rules: 
-        # Join multiple IDs and Descriptions with commas
-        rule_ids = ",".join([str(r.rule_id) for r in exact_rules])
-        official_descs = ", ".join([r.original_description for r in exact_rules])
-        return rule_ids, official_descs
-        
-    return None, None
+log = get_enterprise_logger("ApiSyncWorker")
 
 def safe_string(value):
-    """Catches both the Python None object AND the literal string 'None'."""
-    if value is None:
-        return ""
-    
+    if value is None: return ""
     val_str = str(value).strip()
-    
-    # If the word is "None", return a true empty string
-    if val_str.lower() == "none":
-        return ""
-        
+    if val_str.lower() == "none": return ""
     return val_str
+
 def safe_int_string(value):
-    """
-    Safely extracts a single integer string from DICOM MultiValues.
-    Converts "[50, 50]" -> "50" to prevent Java Jackson crashes.
-    """
-    if value is None:
-        return ""
-        
+    if value is None: return ""
     val_str = str(value).strip()
-    if val_str.lower() == "none" or val_str == "":
-        return ""
-        
-    # Remove Python list brackets if they exist
-    if val_str.startswith('[') and val_str.endswith(']'):
-        val_str = val_str.strip('[]')
-        
-    # If there are multiple values separated by a comma, grab only the first one
-    if ',' in val_str:
-        val_str = val_str.split(',')[0].strip()
-        
-    # Ensure it's a clean integer (handles decimal strings like "50.5" -> "50")
-    try:
-        return str(int(float(val_str)))
-    except ValueError:
-        return "" # If it's completely unparseable text, return empty
-    
-    
+    if val_str.lower() == "none" or val_str == "": return ""
+    if val_str.startswith('[') and val_str.endswith(']'): val_str = val_str.strip('[]')
+    if ',' in val_str: val_str = val_str.split(',')[0].strip()
+    try: return str(int(float(val_str)))
+    except ValueError: return ""
+
 def build_remote_study_payload(study_uid: str, is_update: bool = False):
     study = PatientStudy.query.filter_by(study_uid=study_uid).first()
     if not study: return None, []
 
-    # 1. Map the Center ID
     mapping = InstitutionMapping.query.filter_by(dicom_institution_name=study.institution_name).first()
     if mapping and mapping.center:
         raw_center_code = mapping.center.center_code
@@ -97,25 +42,19 @@ def build_remote_study_payload(study_uid: str, is_update: bool = False):
     rule_id, official_desc = get_mapped_rule(study.study_description, study.modality)
     current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
 
-    # =================================================================
-    # 🚨 PAGINATION FIX: Calculate safe limits based on what is uploaded
-    # =================================================================
     safe_to_report_count = study.uploaded_image_count - study.api_synced_image_count
-    if safe_to_report_count <= 0:
-        return None, [] 
+    if safe_to_report_count <= 0: return None, [] 
         
     fetch_limit = safe_to_report_count
 
-    from database import ImageInstance, Series
+    from core.database import ImageInstance, Series
     unreported_images = ImageInstance.query.join(Series).filter(
         Series.study_uid == study.study_uid,
         ImageInstance.is_api_synced == False
     ).order_by(ImageInstance.received_at).limit(fetch_limit).all()
 
-    if not unreported_images and is_update:
-        return None, [] 
+    if not unreported_images and is_update: return None, [] 
 
-    # 2. MATCH THE EXACT STUDY LEVEL STRUCTURE 
     study_entity = {
         "studyGUID": None,
         "studyID": None,
@@ -132,16 +71,11 @@ def build_remote_study_payload(study_uid: str, is_update: bool = False):
         "manufacturerModelName": study.manufacturer_model_name or None, 
         "institutionName": study.institution_name or "",
         "centerID": my_center_id,  
-        
         "noOfImage": study.image_count,
         "imageUploaded": study.uploaded_image_count,
         "uploadingStatus": 1 if study.uploaded_image_count > 0 else 0,
-        
         "refPhysicianName": study.ref_physician_name or "",
         "studyDescriptionID": rule_id,
-        # "studyDescription": official_desc,
-        # "history": study.patient_history or "", 
-        
         "patient": {
             "patientID": study.patient_id,
             "numberOfPatientRelatedStudies": None,
@@ -153,24 +87,20 @@ def build_remote_study_payload(study_uid: str, is_update: bool = False):
         "seriesEntity": []
     }
 
-    # =================================================================
-    # 3. DYNAMIC SERIES GROUPING 
-    # =================================================================
     incremental_series_dict = {}
-
     for img in unreported_images:
         s_uid = img.series_uid
         series = img.series
-        
         if s_uid not in incremental_series_dict:
             incremental_series_dict[s_uid] = {
                 "seriesInstanceUID": series.series_uid,
                 "seriesNo": series.series_number,
                 "seriesDescription": series.series_description or "",
-                "creationDate": None,
+                "creationDate": current_time_str,
                 "ww": safe_string(img.window_width), 
                 "wl": safe_string(img.window_center), 
-                "sliceThickness": safe_string(img.slice_thickness), 
+                "sliceThickness": safe_string(img.slice_thickness),
+                "noOfFrames": "",
                 "fileName": None,
                 "images": None,
                 "imageEntity": []
@@ -208,91 +138,84 @@ def build_remote_study_payload(study_uid: str, is_update: bool = False):
         incremental_series_dict[s_uid]["imageEntity"].append(img_dict)
 
     study_entity["seriesEntity"] = list(incremental_series_dict.values())
-    payload = {"studyRequestEntity": study_entity}
-
-    return payload, unreported_images
-
+    return {"studyRequestEntity": study_entity}, unreported_images
 
 def send_study_to_api(study_uid: str, is_update: bool = False) -> bool:
-    # 1. Unpack the tuple from the builder
     payload_result = build_remote_study_payload(study_uid, is_update=is_update)
-    if not payload_result or not payload_result[0]:
-        return False
-        
+    if not payload_result or not payload_result[0]: return False
     payload, unreported_images = payload_result
     
-    # 🚨 SSL CRASH FIX: Force connection close
-    headers = {
-        "Content-Type": "application/json",
-        "Connection": "close"
-    }
-    
-    from database import get_system_setting
-    API_URL = get_system_setting(
-        'CREATE_STUDY_API_URL', 
-        'https://icare.anikrafoundation.com:8443/weasisintegratorwf/studymasterservice/createStudy'
-    )
+    headers = {"Content-Type": "application/json", "Connection": "close"}
+    from core.database import get_system_setting
+    API_URL = get_system_setting('CREATE_STUDY_API_URL', 'https://icare.anikrafoundation.com:8443/weasisintegratorwf/studymasterservice/createStudy')
     
     try:
-        log.info(f"{'INCREMENTAL' if is_update else 'INITIAL'} API Sync: Pushing {len(unreported_images)} new images for {study_uid}")
-        
-        # 🚨 SSL CRASH FIX: Added timeout=15 and verify=False
         response = requests.post(API_URL, json=payload, headers=headers, timeout=60, verify=False)
-        
         if response.status_code in (200, 201):
             response_data = response.json()
             if response_data.get("success", False):
-                
-                # ==========================================================
-                # 🚨 MASTER TRACKER FIX: Maintain Pagination Accuracy!
-                # ==========================================================
-                from database import db, db_lock, PatientStudy
                 with db_lock:
-                    for img in unreported_images:
-                        img.is_api_synced = True
-                        
-                    study = PatientStudy.query.get(study_uid)
-                    if study:
-                        study.api_synced_image_count += len(unreported_images)
-                        
+                    for img in unreported_images: img.is_api_synced = True
+                    study = db.session.get(PatientStudy, study_uid)
+                    if study: study.api_synced_image_count += len(unreported_images)
                     db.session.commit()
-                    
                 return True
             else:
-                log.error(f"API rejected the payload: {response_data}")
+                log.error(f"API rejected payload: {response_data}")
                 return False
         else:
             log.error(f"API HTTP Error: {response.status_code} - {response.text}")
             return False
-
     except Exception as e:
-        log.error(f"Critical failure in send_study_to_api: {e}", exc_info=True)
+        log.error(f"Failure in send_study_to_api: {e}")
         return False
 
 def sync_upload_count(study_uid: str, uploaded_count: int, total_count: int):
-    """Pushes only the live uploaded_image_count to the Central API."""
-    import requests
-    from database import get_system_setting
+    from core.database import get_system_setting
     study = PatientStudy.query.filter_by(study_uid=study_uid).first()
     entity = {
         "studyInstanceUID": study_uid,
-        "imageUploaded": uploaded_count, # 🚨 Uses the pure integer passed from the thread
+        "imageUploaded": uploaded_count,
+        "noOfImage": total_count,
         "institutionName": study.institution_name or "",
         "uploadingStatus": 1 if uploaded_count >= total_count else 0
     }
-    payload = {"studyRequestEntity": entity}
-
-    update_api_url = get_system_setting(
-        'CREATE_STUDY_API_URL', 
-        'https://icare.anikrafoundation.com:8443/weasisintegratorwf/studymasterservice/createStudy'
-    )
-    headers = {"Content-Type": "application/json"}
-    
+    API_URL = get_system_setting('CREATE_STUDY_API_URL', 'https://icare.anikrafoundation.com:8443/weasisintegratorwf/studymasterservice/createStudy')
     try:
-        # Fire and forget. 5 second timeout so it doesn't block the background uploader.
-        requests.post(update_api_url, json=payload, headers=headers, timeout=5, verify=False)
-        log.info(f"Updated live upload count on Central Server for {study_uid} -> {uploaded_count}/{total_count}")
+        requests.post(API_URL, json={"studyRequestEntity": entity}, headers={"Content-Type": "application/json"}, timeout=5, verify=False)
         return True
     except Exception as e:
-        log.error(f"Failed to sync upload count for {study_uid}: {e}")
+        log.error(f"Failed to sync count: {e}")
         return False
+
+class ApiSyncWorkerService(threading.Thread):
+    def __init__(self, app):
+        super().__init__(name="ApiSyncWorkerService", daemon=True)
+        self.app = app
+        self._shutdown_flag = threading.Event()
+    
+    def shutdown(self):
+        self._shutdown_flag.set()
+
+    def run(self):
+        log.info("API Sync worker thread started")
+        while not self._shutdown_flag.is_set():
+            with self.app.app_context():
+                try:
+                    pending = PatientStudy.query.filter(PatientStudy.api_synced_image_count == 0, PatientStudy.uploaded_image_count > 0).all()
+                    for study in pending:
+                        s_uid, uploaded, total = study.study_uid, study.uploaded_image_count, study.image_count
+                        if send_study_to_api(s_uid, is_update=False):
+                            try: sync_upload_count(s_uid, uploaded, total)
+                            except Exception as e: log.error(f"Sync initial progress failed: {e}")        
+
+                    incremental = PatientStudy.query.filter(PatientStudy.api_synced_image_count > 0, PatientStudy.uploaded_image_count > PatientStudy.api_synced_image_count).all()
+                    for study in incremental: send_study_to_api(study.study_uid, is_update=True)
+
+                except Exception as e:
+                    db.session.rollback()
+                    log.error(f"API Sync Loop Error: {e}")
+                    
+            for _ in range(50):
+                if self._shutdown_flag.is_set(): break
+                time.sleep(0.1)

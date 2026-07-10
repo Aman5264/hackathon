@@ -1,0 +1,41 @@
+{
+  "CR": {
+    "FUJI": [
+      "PerformedProcedureStepDescription",
+      "StudyDescription",
+      "SeriesDescription"
+    ],
+    "AGFA": [
+      "RequestedProcedureDescription",
+      "StudyDescription",
+      "SeriesDescription"
+    ],
+    "DEFAULT": [
+      "StudyDescription",
+      "PerformedProcedureStepDescription",
+      "SeriesDescription",
+      "StudyComments"
+    ]
+  },
+  "DX": {
+    "GE": [
+      "ProtocolName",
+      "StudyDescription",
+      "SeriesDescription"
+    ],
+    "SIEMENS": [
+      "StudyDescription",
+      "SeriesDescription",
+      "ProtocolName"
+    ],
+
+     "AGFA": [
+      "SeriesDescription"
+    ],
+    "DEFAULT": [
+      "SeriesDescription",
+      "ProtocolName",
+      "StudyComments"
+    ]
+  }
+}

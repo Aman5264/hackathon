@@ -773,7 +773,7 @@
 
                         <div>
                             <label>INITIAL UPLOAD WORKER</label>
-                            <input type="text" name="UL_WORKERS" value="{{ safe_settings.get('UL_WORKERS', '2') }}"
+                            <input type="number" min="1" max="{{ sys_limits.max_upload_threads }}" name="UL_WORKERS" value="{{ safe_settings.get('UL_WORKERS', '2') }}"
                                 required>
                         </div>
 
@@ -790,9 +790,23 @@
                         </div>
 
                         <div>
-                            <label>MAXIMUM CONNECTION ALLOWED </label>
-                            <input type="text" name="MAX_CONCURRENT_CONNECTIONS"
+                            <label>MAXIMUM CONNECTION ALLOWED</label>
+                            <input type="number" min="1" max="{{ sys_limits.max_conn }}" name="MAX_CONCURRENT_CONNECTIONS"
                                 value="{{ safe_settings.get('MAX_CONCURRENT_CONNECTIONS', '5') }}" required>
+                        </div>
+
+                        <div>
+                            <label>COMPRESSION WORKERS</label>
+                            <input type="number" min="1" max="{{ sys_limits.max_comp_threads }}" name="COMPRESSION_WORKERS"
+                                value="{{ safe_settings.get('COMPRESSION_WORKERS', sys_limits.max_comp_threads) }}" required>
+                        </div>
+
+                        <div>
+                            <label>ZIP ALGORITHM</label>
+                            <select name="ZIP_MODE" style="width: 100%; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; box-sizing: border-box; background-color: #fff;">
+                                <option value="STORED" {% if safe_settings.get('ZIP_MODE', 'STORED') == 'STORED' %}selected{% endif %}>Stored (Lightning Fast - No compression)</option>
+                                <option value="DEFLATED" {% if safe_settings.get('ZIP_MODE', 'STORED') == 'DEFLATED' %}selected{% endif %}>Deflated (Slow - High Compression)</option>
+                            </select>
                         </div>
 
                         <div>

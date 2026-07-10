@@ -17,15 +17,15 @@ from pydicom.errors import InvalidDicomError
 from sqlalchemy.exc import IntegrityError
 
 # Single, clean import from database.py
-from database import (db, PatientStudy, queue_study_update, file_lock, db_lock, 
+from core.database import (db, PatientStudy, queue_study_update, file_lock, db_lock, 
                       db_queue, AllowedScanner, AllowedModality, ImageInstance, 
                       AuditLog, ModalityZipRule, DescriptionRule, DescriptionMapping, 
-                      Center, InstitutionMapping, CenterModality, SystemSetting, ReferringPhysician, ModalityCompressionRule)
+                      Center, InstitutionMapping, CenterModality, SystemSetting, ReferringPhysician, ModalityCompressionRule, PipelineStatus)
 
-from receiver import start_dicom_server, stop_dicom_server, get_custom_path, invalidate_modality_cache, dicom_watchdog_loop
+from ingestion.dicom_receiver import start_dicom_server, stop_dicom_server, get_custom_path, invalidate_modality_cache, dicom_watchdog_loop
+from services.metadata_engine import engine as metadata_engine
 from config import Config
 from logger import get_enterprise_logger
-from processor import db_worker_loop, metrics_logger_loop, compression_loop, PerformanceMetrics, zipping_loop, upload_loop
 from activity_tracker import tracker
 import webview
 
@@ -75,7 +75,7 @@ def authenticate_gateway_on_boot(app):
     Validates them against the central server and saves the state to app.config.
     """
     with app.app_context():
-        from database import get_system_setting
+        from core.database import get_system_setting
         db_user = SystemSetting.query.filter_by(key='gateway_username').first()
         db_pass = SystemSetting.query.filter_by(key='gateway_password').first()
         auth_url = get_system_setting('AUTH_API_URL', 'https://fallback-url.com')
@@ -136,7 +136,8 @@ def enforce_setup():
         'delete_mapping', 
         'admin_logout',    
         'logout',
-        'authenticate_gateway'                     # <-- ADDED SO YOU CAN LOG OUT OF MAIN DASHBOARD
+        'authenticate_gateway',                     # <-- ADDED SO YOU CAN LOG OUT OF MAIN DASHBOARD
+        'shutdown'                                  # <-- WHITELIST SHUTDOWN TO PREVENT FREEZING
     ]
     
     # If the user is trying to access a whitelisted admin/setup page, let them through
@@ -223,6 +224,15 @@ def unified_admin():
     zip_rules = ModalityZipRule.query.all()
     comp_rules = ModalityCompressionRule.query.all()
     
+    from systemProfile import SystemProfile
+    import os
+    is_legacy = SystemProfile.is_legacy_node()
+    sys_limits = {
+        'max_conn': 2 if is_legacy else 50,
+        'max_comp_threads': 1 if is_legacy else max(2, (os.cpu_count() or 2) - 1),
+        'max_upload_threads': 1 if is_legacy else 16
+    }
+    
     return render_template('unified_admin.html', 
                            scanners=scanners, 
                            modalities=modalities, 
@@ -233,7 +243,8 @@ def unified_admin():
                            comp_rules=comp_rules,
                            has_creds=has_creds, 
                            gateway_user=gateway_user,
-                           sys_settings=sys_settings)
+                           sys_settings=sys_settings,
+                           sys_limits=sys_limits)
 
 
 import urllib3
@@ -246,7 +257,7 @@ from mapper import get_mapped_rule # <-- Add this import if it isn't at the top!
 @app.route('/api/patients/<study_uid>/push_updates', methods=['POST'])
 def push_study_updates(study_uid):
     # 1. Fetch the patient from your local database
-    study = PatientStudy.query.get(study_uid)
+    study = db.session.get(PatientStudy, study_uid)
     if not study:
         return jsonify({"error": "Study not found"}), 404
 
@@ -320,7 +331,7 @@ def push_study_updates(study_uid):
     import json
     log.info(f"Pushing partial update to Central API for {study_uid}: {json.dumps(payload)}")
 
-    from database import get_system_setting
+    from core.database import get_system_setting
     update_api_url = get_system_setting(
         'UPDATE_STUDY_API_URL', 
         'https://icare.anikrafoundation.com:8443/weasisintegratorwf/studymasterservice/updateStudy/'
@@ -349,7 +360,7 @@ def push_study_updates(study_uid):
 def home():
     
     from datetime import datetime, timedelta
-    from database import get_system_setting
+    from core.database import get_system_setting
     search_text = request.args.get('search_query', '')
     modality_filter = request.args.get('modality_filter', '')
     date_filter = request.args.get('date_filter')
@@ -397,6 +408,55 @@ def home():
                            center_name=center_name,       
                            center_code=center_code)
 
+@app.route('/api/system/reset', methods=['POST'])
+def reset_system():
+    """Nuclear option to wipe all studies, files, and queues."""
+    # 1. Clear Memory Queues to prevent zombie files
+    from core.event_bus import db_write_queue, compression_queue, zip_queue, upload_queue
+    try:
+        with db_write_queue.mutex: db_write_queue.queue.clear()
+        with compression_queue.mutex: compression_queue.queue.clear()
+        with zip_queue.mutex: zip_queue.queue.clear()
+        with upload_queue.mutex: upload_queue.queue.clear()
+    except Exception:
+        pass # Ignore queue errors if any
+
+    # 2. Clear Database
+    from core.database import db, PatientStudy, Series, ImageInstance, AuditLog
+    try:
+        db.session.query(ImageInstance).delete()
+        db.session.query(Series).delete()
+        db.session.query(PatientStudy).delete()
+        db.session.query(AuditLog).delete()
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"success": False, "error": f"DB Error: {e}"}), 500
+
+    # 3. Wipe Disk (Incoming, Processing, Outgoing, Backup, Archive, and Error)
+    import shutil
+    folders_to_wipe = [
+        Config.INCOMING_FOLDER,
+        Config.PROCESSING_FOLDER,
+        Config.OUTGOING_FOLDER,
+        Config.BACKUP_FOLDER,
+        Config.ARCHIVE_FOLDER,
+        getattr(Config, 'ERROR_FOLDER', './error_data')
+    ]
+    for folder in folders_to_wipe:
+        if os.path.exists(folder):
+            for filename in os.listdir(folder):
+                file_path = os.path.join(folder, filename)
+                try:
+                    if os.path.isfile(file_path) or os.path.islink(file_path):
+                        os.unlink(file_path)
+                    elif os.path.isdir(file_path):
+                        shutil.rmtree(file_path)
+                except Exception:
+                    pass # Skip locked files
+
+    return jsonify({"success": True, "message": "System fully reset."})
+
 @app.route('/delete/<uid>')
 def delete_study(uid):
     # Fetch the study from the database before deleting it so we can read its metadata
@@ -421,7 +481,7 @@ def delete_study(uid):
         incoming_target = os.path.join(getattr(Config, 'INCOMING_FOLDER', 'Incoming'), flat_folder_name)
         backup_target = os.path.join(getattr(Config, 'BACKUP_FOLDER', 'Backup_Data'), flat_folder_name)
         
-        outbound_base = getattr(Config, 'OUTBOUND_FOLDER', 'Outbound_Data')
+        outbound_base = getattr(Config, 'OUTGOING_FOLDER', 'data/outgoing')
         staging_target = os.path.join(outbound_base, 'staging', uid)
         
         # --- FIND ORPHANED ZIPS ---
@@ -454,8 +514,13 @@ def delete_study(uid):
                 # Sweep D: Orphaned ZIP chunks (If pipeline crashed during upload)
                 for zip_path in zips_to_delete:
                     if os.path.exists(zip_path):
-                        os.remove(zip_path)
-                        log.info(f"Swept leftover zip chunk: {os.path.basename(zip_path)}")
+                        try:
+                            os.remove(zip_path)
+                            log.info(f"Swept leftover zip chunk: {os.path.basename(zip_path)}")
+                        except PermissionError:
+                            with open(zip_path + ".deleted", "w") as f:
+                                f.write("deleted")
+                            log.warning(f"File {zip_path} locked by background worker. Dropped anti-zombie marker.")
                         
         except Exception as e:
             log.error("Failed to clear some physical folders during study deletion", extra={"study_uid": uid}, exc_info=True)
@@ -481,7 +546,7 @@ def delete_study(uid):
     return redirect('/')
 
 
-from database import PipelineStatus # Make sure you have this if using Enum statuses!
+from core.database import PipelineStatus # Make sure you have this if using Enum statuses!
 
 @app.route('/api/patients/<study_uid>/toggle_pause', methods=['POST'])
 def toggle_pause(study_uid):
@@ -529,9 +594,9 @@ def get_live_activity():
 
 
 
-from database import AllowedModality 
+from core.database import AllowedModality 
 
-from database import AllowedModality, ImageInstance, db_lock # <-- Ensure ImageInstance and db_lock are imported!
+from core.database import AllowedModality, ImageInstance, db_lock # <-- Ensure ImageInstance and db_lock are imported!
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
@@ -570,21 +635,11 @@ def upload_file():
             series_uid = str(getattr(ds, 'SeriesInstanceUID', 'UNKNOWN'))
             sop_uid = str(getattr(ds, 'SOPInstanceUID', 'UNKNOWN'))
             
-            if "UNKNOWN" in (s_uid, series_uid, sop_uid) or 'PixelData' not in ds:
+            if "UNKNOWN" in (s_uid, series_uid, sop_uid):
                 failed_count += 1
-                error_messages.append(f"{file.filename}: Missing critical UIDs or PixelData")
+                error_messages.append(f"{file.filename}: Missing critical UIDs")
                 continue
 
-            # =================================================================
-            # 🚨 THE FIX: INSTANT DUPLICATE CHECK
-            # =================================================================
-            with db_lock:
-                existing_image = ImageInstance.query.filter_by(sop_uid=sop_uid).first()
-                if existing_image:
-                    processed_count += 1 # Count as processed so the UI shows success
-                    log.info(f"Manual Upload Skipped: SOP {sop_uid} already exists in DB.")
-                    continue # Skip the rest of the loop and move to the next file!
-            # =================================================================
 
             # 4. MODALITY FIREWALL
             mod = str(getattr(ds, 'Modality', 'Unknown')).strip().upper()
@@ -592,6 +647,11 @@ def upload_file():
             if not allowed:
                 failed_count += 1
                 error_messages.append(f"{file.filename}: Unauthorized Modality ({mod})")
+                from config import Config
+                import os
+                error_dir = getattr(Config, 'ERROR_FOLDER', './error_data')
+                os.makedirs(error_dir, exist_ok=True)
+                ds.save_as(os.path.join(error_dir, sop_uid + '.dcm'), write_like_original=False)
                 continue
 
             # 5. METADATA EXTRACTION
@@ -618,6 +678,7 @@ def upload_file():
                 if not os.path.exists(final_incoming):
                     with open(temp_incoming, 'wb') as f:
                         f.write(file_bytes)
+                    os.rename(temp_incoming, final_incoming)
 
                 if not os.path.exists(final_backup):
                     with open(temp_backup, 'wb') as f:
@@ -638,7 +699,7 @@ def upload_file():
                 'patient_birth_date': str(getattr(ds, "PatientBirthDate", "")),
                 'modality': mod,
                 'study_date': formatted_date,
-                'study_description': str(getattr(ds, "StudyDescription", "")),
+                'study_description': metadata_engine.extract_best_study_description(ds),
                 'institution_name': str(getattr(ds, "InstitutionName", "")),
                 'ref_physician_name': str(getattr(ds, "ReferringPhysicianName", "")).replace('^', ' '),
                 'accession_number': str(getattr(ds, "AccessionNumber", "")),
@@ -748,7 +809,7 @@ def zip_rules():
     # --- THE DELETE LOGIC ---
     elif action == 'delete':
         rule_id = request.form.get('rule_id')
-        rule = ModalityZipRule.query.get(rule_id)
+        rule = db.session.get(ModalityZipRule, rule_id)
         if rule:
             db.session.delete(rule)
             db.session.commit()
@@ -824,7 +885,7 @@ def settings():
 
     elif action == 'delete':
         scanner_id = request.form.get('scanner_id')
-        scanner = AllowedScanner.query.get(scanner_id)
+        scanner = db.session.get(AllowedScanner, scanner_id)
         if scanner:
             db.session.delete(scanner)
             db.session.commit()
@@ -866,7 +927,7 @@ def settings():
 
     elif action == 'delete_modality':
         mod_id = request.form.get('modality_id')
-        mod = AllowedModality.query.get(mod_id)
+        mod = db.session.get(AllowedModality, mod_id)
         if mod:
             db.session.delete(mod)
             db.session.commit()
@@ -882,7 +943,7 @@ def settings():
             'UL_WORKERS', 'UL_MAX_RETRIES', 'DICOM_PORT', 'MAX_CONCURRENT_CONNECTIONS', 
             'DICOM_AE_TITLE', 'HOST', 'STUDY_COOLDOWN_SECONDS',
             'DB_RETENTION_DAYS', 'BACKUP_RETENTION_DAYS', 'WORKING_RETENTION_DAYS',
-            'LOCAL_CENTER_NAME', 'LOCAL_CENTER_CODE'
+            'LOCAL_CENTER_NAME', 'LOCAL_CENTER_CODE', 'COMPRESSION_WORKERS', 'ZIP_MODE'
         ]
         
         log.info(f"INCOMING PAYLOAD: {request.form}")
@@ -946,7 +1007,7 @@ def authenticate_gateway():
     return render_template('settings.html', scanners=scanners, modalities=modalities)
 
 
-from database import DescriptionRule, DescriptionMapping
+from core.database import DescriptionRule, DescriptionMapping
 
 # ==========================================
 # DICTIONARY MAPPING ROUTE (POST ONLY)
@@ -999,7 +1060,7 @@ def delete_mapping():
     if mapping_id:
         with db_lock:
             # Find the mapping by its database ID
-            mapping = DescriptionMapping.query.get(mapping_id)
+            mapping = db.session.get(DescriptionMapping, mapping_id)
             if mapping:
                 db.session.delete(mapping)
                 db.session.commit()
@@ -1059,13 +1120,22 @@ def manage_centers():
                         rule = CenterModality(center_id=center.id, modality_name=mod)
                         db.session.add(rule)
 
+                # 4. Instantly unblock any pending studies on the UI
+                blocked_studies = PatientStudy.query.filter_by(
+                    institution_name=dicom_name, 
+                    remote_upload_id='UNMAPPED_CENTER'
+                ).all()
+                for bs in blocked_studies:
+                    bs.remote_upload_id = ''
+                    bs.upload_status = PipelineStatus.PENDING
+
                 db.session.commit()
                 flash(f"Center {center_code} configured successfully!", "success")
 
             # --- ACTION: DELETE ENTIRE CENTER ---
             elif action == 'delete_center':
                 center_id = request.form.get('center_id')
-                center = Center.query.get(center_id)
+                center = db.session.get(Center, center_id)
                 if center:
                     db.session.delete(center)
                     db.session.commit()
@@ -1074,7 +1144,7 @@ def manage_centers():
             # --- ACTION: DELETE SPECIFIC MAPPING ---
             elif action == 'delete_mapping':
                 mapping_id = request.form.get('mapping_id')
-                mapping = InstitutionMapping.query.get(mapping_id)
+                mapping = db.session.get(InstitutionMapping, mapping_id)
                 if mapping:
                     db.session.delete(mapping)
                     db.session.commit()
@@ -1142,7 +1212,7 @@ def update_physician(study_uid):
     new_name = data.get('physician_name', '').strip()
 
     # 1. Find the patient
-    patient = PatientStudy.query.get(study_uid)
+    patient = db.session.get(PatientStudy, study_uid)
     if not patient:
         return jsonify({"error": "Patient not found"}), 404
 
@@ -1174,7 +1244,7 @@ def update_history(study_uid):
     new_history = data.get('history', '').strip()
 
     # 1. Find the patient
-    patient = PatientStudy.query.get(study_uid)
+    patient = db.session.get(PatientStudy, study_uid)
     if not patient:
         return jsonify({"error": "Patient not found"}), 404
 
@@ -1214,7 +1284,7 @@ def update_outgoing_desc(study_uid):
     if not rule_ids_string or not official_descs:
         return jsonify({"error": "Missing rule ID or description"}), 400
 
-    patient = PatientStudy.query.get(study_uid)
+    patient = db.session.get(PatientStudy, study_uid)
     if not patient:
         return jsonify({"error": "Patient not found"}), 404
 
@@ -1256,7 +1326,7 @@ def update_outgoing_desc(study_uid):
 
 
 
-from database import db_lock, PatientStudy, PipelineStatus
+from core.database import db_lock, PatientStudy, PipelineStatus
 
 @app.route('/api/patients/<study_uid>/retry_upload', methods=['POST'])
 def retry_upload(study_uid):
@@ -1278,11 +1348,25 @@ def retry_upload(study_uid):
             
         # --- THE RECOVERY FIX: Find orphaned ZIPs and push to queue ---
         import glob
-        from processor import upload_queue
+        from core.event_bus import upload_queue
         
-        outbound_base = getattr(Config, 'OUTBOUND_FOLDER', 'Outbound_Data')
+        outbound_base = getattr(Config, 'OUTGOING_FOLDER', 'data/outgoing')
         search_pattern = os.path.join(outbound_base, f"*_{study_uid}_contains_*.zip")
+        failed_pattern = os.path.join(outbound_base, f"*_{study_uid}_contains_*.zip.failed")
+        
         orphaned_zips = glob.glob(search_pattern)
+        failed_zips = glob.glob(failed_pattern)
+        
+        # Recover .failed zips by renaming them back to .zip
+        import shutil
+        for failed_zip in failed_zips:
+            try:
+                recovered_zip = failed_zip[:-7] # Remove '.failed'
+                shutil.move(failed_zip, recovered_zip)
+                orphaned_zips.append(recovered_zip)
+                log.info(f"Recovered failed archive: {recovered_zip}")
+            except Exception as e:
+                log.error(f"Could not recover failed archive {failed_zip}: {e}")
         
         queued_count = 0
         for zip_path in orphaned_zips:
@@ -1327,7 +1411,7 @@ def stream():
 @app.route('/api/render_row/<study_uid>')
 def render_row(study_uid):
     """Renders just the raw HTML for a single table row."""
-    study = PatientStudy.query.get(study_uid)
+    study = db.session.get(PatientStudy, study_uid)
     if not study:
         return "", 404
     return render_template('study_row.html', s=study)
@@ -1365,7 +1449,7 @@ def handle_compression_rules():
                 
             elif action == 'delete':
                 rule_id = request.form.get('rule_id')
-                rule = ModalityCompressionRule.query.get(rule_id)
+                rule = db.session.get(ModalityCompressionRule, rule_id)
                 if rule:
                     db.session.delete(rule)
                     db.session.commit()
@@ -1382,7 +1466,7 @@ def handle_compression_rules():
 @app.route('/api/admin/compression_rules/<int:rule_id>', methods=['DELETE'])
 def delete_compression_rule(rule_id):
     with db_lock:
-        rule = ModalityCompressionRule.query.get(rule_id)
+        rule = db.session.get(ModalityCompressionRule, rule_id)
         if rule:
             db.session.delete(rule)
             db.session.commit()
@@ -1423,10 +1507,11 @@ import socket
 
 is_shutting_down = False
 worker_thread = None
+active_workers = []
 
 def graceful_shutdown():
     """The Fire Chief: Orchestrates the safe shutdown of the entire hospital."""
-    global is_shutting_down, worker_thread
+    global is_shutting_down
     
     if is_shutting_down:
         return 
@@ -1439,9 +1524,18 @@ def graceful_shutdown():
     except Exception as e:
         log.error(f"Failed to stop DICOM server cleanly: {e}")
     
-    items_left = db_queue.qsize()
+    from core.event_bus import db_write_queue, DBWriteEvent
+    items_left = db_write_queue.qsize()
     log.info(f"Dispatching poison pill. {items_left} items remaining in queue.")
-    db_queue.put("SHUTDOWN")
+    db_write_queue.put(DBWriteEvent(action="SHUTDOWN", payload={}))
+    
+    # Also set the flag if the worker supports it
+    if hasattr(worker_thread, 'shutdown'):
+        worker_thread.shutdown()
+        
+    for w in active_workers:
+        if hasattr(w, 'shutdown'):
+            w.shutdown()
     
     # SAFEGUARD: Timed wait instead of infinite hang
     if worker_thread and worker_thread.is_alive():
@@ -1469,13 +1563,13 @@ from waitress import serve
 def start_enterprise_pipeline(app):
     global worker_thread
     
-    if worker_thread and worker_thread.is_alive():
+    # In the new architecture, we'll just check if the global flag is set
+    # Or rely on the fact that this is called once.
+    if worker_thread and hasattr(worker_thread, 'is_alive') and worker_thread.is_alive():
         log.info("Enterprise Pipeline is already running. Skipping boot sequence.")
         return True
 
     log.info("✅ Booting Enterprise Pipeline...")
-    from processor import reset_orphaned_tasks
-    reset_orphaned_tasks(app)
     from mapper import sync_rules_to_database
     
     def background_rule_sync():
@@ -1486,25 +1580,81 @@ def start_enterprise_pipeline(app):
                 log.error(f"Background rule sync failed at boot: {e}")
                 
     threading.Thread(target=background_rule_sync, daemon=True, name="RuleSyncThread").start()
+    
+    def recover_pipeline_state():
+        from core.database import db, ImageInstance, Series, PipelineStatus
+        from core.event_bus import compression_queue, CompressionTaskEvent
+        with app.app_context():
+            try:
+                # Reset stuck PROCESSING statuses
+                stuck_images = ImageInstance.query.filter_by(compression_status=PipelineStatus.PROCESSING).all()
+                for img in stuck_images:
+                    img.compression_status = PipelineStatus.PENDING
+                
+                if stuck_images:
+                    db.session.commit()
+                
+                # Requeue all PENDING images so the compressor resumes
+                pending_images = ImageInstance.query.join(Series).filter(
+                    ImageInstance.compression_status == PipelineStatus.PENDING
+                ).all()
+                for img in pending_images:
+                    study_uid = img.series.study_uid
+                    compression_queue.put(CompressionTaskEvent(
+                        file_path=img.file_path,
+                        study_uid=study_uid,
+                        sop_uid=img.sop_uid
+                    ))
+                    
+                if stuck_images or pending_images:
+                    log.info(f"Pipeline Recovery: Reset {len(stuck_images)} stuck images, Queued {len(pending_images)} pending compressions.")
+            except Exception as e:
+                log.error(f"Pipeline Recovery failed: {e}")
+                
+    threading.Thread(target=recover_pipeline_state, daemon=True, name="PipelineRecoveryThread").start()
   
-    worker_thread = threading.Thread(target=db_worker_loop, args=(app,), daemon=True)
+    # --- CQRS Database Writer Service ---
+    from core.db_writer import DatabaseWriterService
+    worker_thread = DatabaseWriterService(app)
     worker_thread.start()
-    log.info("Database worker thread initialized")
+    log.info("DatabaseWriterService thread initialized")
     
-    threading.Thread(target=metrics_logger_loop, daemon=True).start()
-    from processor import database_janitor_loop, backup_janitor_loop, working_folder_janitor_loop
+    # --- Workers ---
+    from workers.compression_worker import CompressionWorkerService
+    from workers.zip_worker import ZipWorkerService
+    from workers.upload_worker import UploadWorkerService, UploadWatchdogService
+    from ingestion.dicom_receiver import start_dicom_server, dicom_watchdog_loop
     
-    threading.Thread(target=database_janitor_loop, args=(app,), daemon=True, name="DB-Janitor").start()
-    threading.Thread(target=backup_janitor_loop, args=(app,), daemon=True, name="Backup-Janitor").start()
-    threading.Thread(target=working_folder_janitor_loop, args=(app,), daemon=True, name="Working-Janitor").start()
-    threading.Thread(target=compression_loop, args=(app,), daemon=True).start()
-    threading.Thread(target=zipping_loop, args=(app,), daemon=True).start()
-    for i in range(3):
-        threading.Thread(target=upload_loop, args=(app,), daemon=True, name=f"UploadWorker-{i}").start()
+    for _ in range(Config.COMPRESSION_WORKERS):
+        w = CompressionWorkerService(app)
+        w.start()
+        active_workers.append(w)
+        
+    w = ZipWorkerService(app)
+    w.start()
+    active_workers.append(w)
     
-    from processor import api_sync_loop
-    threading.Thread(target=api_sync_loop, args=(app,), daemon=True).start()
-    log.info("API Sync worker thread started")
+    for _ in range(Config.UPLOAD_WORKERS):
+        w = UploadWorkerService(app)
+        w.start()
+        active_workers.append(w)
+        
+    w = UploadWatchdogService(app)
+    w.start()
+    active_workers.append(w)
+
+    from workers.api_sync_worker import ApiSyncWorkerService
+    from workers.maintenance_worker import MaintenanceWorkerService
+    
+    w = ApiSyncWorkerService(app)
+    w.start()
+    active_workers.append(w)
+    
+    w = MaintenanceWorkerService(app)
+    w.start()
+    active_workers.append(w)
+    
+    log.info("API Sync and Maintenance worker threads started")
     
     threading.Thread(target=start_dicom_server, args=(app,), daemon=True).start()
     log.info("DICOM Listener started in background")
@@ -1529,7 +1679,7 @@ def run_flask(port):
     log.info(f"Starting Flask Web Interface on port {port}")
     # use_reloader=False is MANDATORY for .exe
     from waitress import serve
-    serve(app, host='127.0.0.1', port=port, threads=100, clear_untrusted_proxy_headers=True)
+    serve(app, host='127.0.0.1', port=port, threads=Config.WAITRESS_THREADS, clear_untrusted_proxy_headers=True)
 # ==========================================
 # MAIN EXECUTION
 # ==========================================
@@ -1593,30 +1743,35 @@ if __name__ == '__main__':
     if not port_bound:
         log.warning("Port check timed out, but forcing UI window to open anyway!")
 
-    # Create UI Window
+    class WebAPI:
+        def confirm_quit(self):
+            log.info("🚪 User confirmed exit via custom UI. Triggering graceful shutdown...")
+            graceful_shutdown()
+            window.allow_close = True
+            window.destroy()
+            return True
+
+    api = WebAPI()
+
     # Create UI Window
     window = webview.create_window(
         "Powered BY Icare Infosystem Pvt. Ltd.",
        f"http://127.0.0.1:{LIVE_UI_PORT}",
         width=1400,
-        height=900
+        height=900,
+        js_api=api
     )
     
     # 1. Define the interception logic INSIDE the main block so it has access to 'window'
     def confirm_exit():
-        # Trigger pywebview's native OS confirmation popup
-        user_wants_to_quit = window.create_confirmation_dialog(
-            'Confirm Exit', 
-            'Are you sure you want to close the Gateway?\n\nAny active DICOM transfers will be safely paused and will resume on the next startup.'
-        )
-        
-        if user_wants_to_quit:
-            log.info("🚪 User confirmed exit. Triggering graceful shutdown...")
-            graceful_shutdown() 
-            return True # Returning True tells pywebview it is legally allowed to close
-        else:
-            log.info("❌ User canceled exit. Application remains running.")
-            return False # Returning False intercepts the X click and keeps the app alive
+        # If the API triggered the quit, we allow it
+        if getattr(window, 'allow_close', False):
+            return True
+            
+        # Otherwise, intercept the close and show the custom HTML modal in the UI
+        import threading
+        threading.Timer(0.1, lambda: window.evaluate_js('if (window.showCustomExitModal) { window.showCustomExitModal(); } else { pywebview.api.confirm_quit(); }')).start()
+        return False
 
     # 2. Hook to the 'closing' event (NOT 'closed'!)
     window.events.closing += confirm_exit
@@ -1636,7 +1791,7 @@ if __name__ == '__main__':
 
     try:
         # Blocks the main thread until the user closes the window
-        webview.start()
+        webview.start(gui='edgechromium', private_mode=False)
     except KeyboardInterrupt:
         log.warning("Terminal CTRL+C detected. Forcing closure...")
         graceful_shutdown()

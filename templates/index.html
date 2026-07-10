@@ -427,7 +427,9 @@
         <a href="/?date_filter=all" class="btn btn-ghost"><i class="bi bi-collection"></i> All</a>
         <a href="/" class="btn btn-ghost" style="color:var(--red);"><i class="bi bi-x-circle-fill"></i> Reset</a>
         <div class="toolbar-sep"></div>
+        <span style="font-size:13px; font-weight:700; color:var(--purple-lt); margin-right:12px; letter-spacing:0.03em;">{{ studies|length }} CASE{% if studies|length != 1 %}S{% endif %}</span>
         <a href="/upload-page" class="btn btn-purple"><i class="bi bi-cloud-upload-fill"></i> Upload Study</a>
+        <button type="button" class="btn btn-red-ghost" onclick="nukeSystem()"><i class="bi bi-exclamation-triangle-fill"></i> Factory Reset</button>
     </div>
     </form>
 
@@ -570,8 +572,38 @@
     </div>
 </div>
 
+<div id="exitModalOverlay" class="m-overlay" onclick="window.cancelExit()"></div>
+<div id="exitConfirmModal" class="modal" style="display:none; max-width: 450px;">
+    <div class="m-hdr" style="border-bottom: 1px solid var(--border); padding-bottom: 16px;">
+        <div class="m-title"><div class="m-ico" style="background:var(--red-dim);color:var(--red);"><i class="bi bi-exclamation-triangle-fill"></i></div>Confirm Exit</div>
+        <button class="m-close" onclick="window.cancelExit()"><i class="bi bi-x-lg"></i></button>
+    </div>
+    <div class="m-body" style="padding: 24px 0;">
+        <p style="font-size: 16px; font-weight: 500; margin-bottom: 12px; color: var(--txt-hi);">Are you sure you want to close the Gateway?</p>
+        <p style="color: var(--txt-sec); line-height: 1.5;">Any active DICOM transfers will be safely paused and will resume on the next startup.</p>
+    </div>
+    <div class="m-ftr" style="border-top: 1px solid var(--border); padding-top: 16px;">
+        <button class="btn btn-ghost btn-sm" onclick="window.cancelExit()">Cancel</button>
+        <button class="btn btn-purple btn-sm" style="background: var(--red); color: white;" onclick="window.confirmExit()"><i class="bi bi-power"></i> EXIT</button>
+    </div>
+</div>
 
 <script>
+// ── CUSTOM EXIT MODAL
+window.showCustomExitModal = function() {
+    _open('exitModalOverlay','exitConfirmModal');
+};
+window.cancelExit = function() {
+    document.getElementById('exitModalOverlay').style.display = 'none';
+    document.getElementById('exitConfirmModal').style.display = 'none';
+};
+window.confirmExit = function() {
+    window.cancelExit();
+    if(window.pywebview && window.pywebview.api) {
+        window.pywebview.api.confirm_quit();
+    }
+};
+
 // ── LIVE TERMINAL
 function fetchLiveActivity(){
     fetch('/api/activity').then(r=>r.ok?r.json():Promise.reject()).then(d=>{
@@ -581,22 +613,52 @@ function fetchLiveActivity(){
 }
 fetchLiveActivity(); setInterval(fetchLiveActivity,2000);
 
-// ── SSE
-const evtSource=new EventSource('/api/stream');
-evtSource.onmessage=function(e){
-    const data=JSON.parse(e.data);
-    if(data.action==='update_row'){
-        fetch(`/api/render_row/${data.study_uid}`).then(r=>r.status===200?r.text():Promise.reject()).then(html=>{
-            const ex=document.getElementById('row-'+data.study_uid);
-            if(ex){ ex.innerHTML=html; }
-            else{
-                const tbody=document.getElementById('study-table-body'),
-                      row=document.createElement('tr');
-                row.id='row-'+data.study_uid; row.innerHTML=html;
-                const empty=tbody.querySelector('td[colspan]'); if(empty) tbody.innerHTML='';
-                tbody.insertBefore(row,tbody.firstChild);
+// ── SSE with requestAnimationFrame Sponge
+const evtSource = new EventSource('/api/stream');
+const pendingUpdates = new Set();
+let isUpdateScheduled = false;
+
+function processSponge() {
+    if (pendingUpdates.size === 0) {
+        isUpdateScheduled = false;
+        return;
+    }
+    
+    // Extract batch
+    const batch = Array.from(pendingUpdates);
+    pendingUpdates.clear();
+    
+    // Process DOM updates
+    batch.forEach(uid => {
+        fetch(`/api/render_row/${uid}`).then(r=>r.status===200?r.text():Promise.reject()).then(html=>{
+            const ex = document.getElementById('row-'+uid);
+            if (ex) { ex.innerHTML = html; }
+            else {
+                const tbody = document.getElementById('study-table-body'),
+                      row = document.createElement('tr');
+                row.id = 'row-'+uid; row.innerHTML = html;
+                const empty = tbody.querySelector('td[colspan]'); if (empty) tbody.innerHTML = '';
+                tbody.insertBefore(row, tbody.firstChild);
             }
         }).catch(e=>console.error('SSE row error:',e));
+    });
+    
+    // Schedule next frame if more arrived during fetch
+    if (pendingUpdates.size > 0) {
+        requestAnimationFrame(processSponge);
+    } else {
+        isUpdateScheduled = false;
+    }
+}
+
+evtSource.onmessage = function(e){
+    const data = JSON.parse(e.data);
+    if(data.action === 'update_row'){
+        pendingUpdates.add(data.study_uid);
+        if (!isUpdateScheduled) {
+            isUpdateScheduled = true;
+            requestAnimationFrame(processSponge);
+        }
     }
 };
 
@@ -712,6 +774,26 @@ function autoSyncToCloud(uid,type){
     .then(r=>r.json()).then(d=>{
         if(d.success){ el.style.color='var(--green)'; el.innerText='✅ Synced!'; setTimeout(()=>{el.style.color='';fetchLiveActivity();},3000); }
         else alert('Local save OK, sync failed: '+d.error);
+    });
+}
+function nukeSystem() {
+    if(!confirm("⚠️ CAUTION: This will permanently delete ALL studies, completely clear the database, and wipe all local DICOM files from Incoming, Compressed, Outgoing, and Error folders! Are you ABSOLUTELY sure?")) return;
+    
+    // Double confirmation for safety
+    if(!confirm("Are you really sure? This action CANNOT be undone.")) return;
+
+    fetch('/api/system/reset', { method: 'POST' })
+    .then(r => r.json())
+    .then(d => {
+        if(d.success) {
+            alert("✅ System has been completely reset to factory defaults.");
+            window.location.href = '/';
+        } else {
+            alert("❌ Failed to reset system: " + d.error);
+        }
+    })
+    .catch(err => {
+        alert("❌ Error communicating with server.");
     });
 }
 </script>

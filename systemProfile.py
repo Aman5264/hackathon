@@ -57,6 +57,13 @@ class SystemProfile:
     @staticmethod
     def has_sufficient_disk(path: str, required_gb: float = 5.0) -> bool:
         """Safety check to ensure the hospital's drive isn't full."""
-        usage = psutil.disk_usage(path)
+        check_path = os.path.abspath(path)
+        while not os.path.exists(check_path):
+            parent = os.path.dirname(check_path)
+            if parent == check_path:
+                break
+            check_path = parent
+            
+        usage = psutil.disk_usage(check_path)
         free_gb = usage.free / (1024 ** 3)
         return free_gb > required_gb

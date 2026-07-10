@@ -49,7 +49,7 @@ def _env_float(key: str, default: float) -> float:
 
 
 # Add this import near your other imports at the top
-from database import get_system_setting
+from core.database import get_system_setting
 
 # Keep your existing _env and _env_int functions, but add this new one below them:
 def _db_or_env_int(key: str, default: int) -> int:
@@ -78,7 +78,7 @@ class UploadConfig:
     max_timeout:          float = field(default_factory=lambda: _env_float("UL_MAX_TIMEOUT",  300.0))
     max_retries:          int   = field(default_factory=lambda: _db_or_env_int  ("UL_MAX_RETRIES",    7))
     rate_limit_bps:       int   = field(default_factory=lambda: _env_int  ("UL_RATE_LIMIT_BPS", 0))
-    default_mode:         str   = field(default_factory=lambda: _env      ("UL_MODE",      "parallel"))
+    default_mode:         str   = field(default_factory=lambda: "sequential")
     net_check_host:       str   = field(default_factory=lambda: _env      ("UL_NET_HOST",   "8.8.8.8"))
     net_check_port:       int   = field(default_factory=lambda: _env_int  ("UL_NET_PORT",   53))
     net_check_interval:   float = field(default_factory=lambda: _env_float("UL_NET_INTERVAL", 5.0))
@@ -284,9 +284,17 @@ class TokenBucketRateLimiter:
 # ==========================================
 
 class NetworkMonitor:
-    def __init__(self, cfg: UploadConfig) -> None:
+    def __init__(self, cfg: UploadConfig, api_url: str = "") -> None:
         self._host     = cfg.net_check_host
         self._port     = cfg.net_check_port
+        
+        if api_url:
+            from urllib.parse import urlparse
+            parsed = urlparse(api_url)
+            if parsed.hostname:
+                self._host = parsed.hostname
+                self._port = parsed.port or (443 if parsed.scheme == "https" else 80)
+                
         self._interval = cfg.net_check_interval
         self._timeout  = cfg.net_wait_timeout
         self.network_up = asyncio.Event()
@@ -341,7 +349,7 @@ class NetworkMonitor:
         done, pending = await asyncio.wait(
             {net_task, cancel_task},
             return_when=asyncio.FIRST_COMPLETED,
-            timeout=self._timeout,
+            # We explicitly wait indefinitely for network; removing the timeout
         )
         for t in pending:
             t.cancel()
@@ -351,8 +359,7 @@ class NetworkMonitor:
                 pass
         if cancel_flag.is_set():
             raise asyncio.CancelledError("Cancelled while waiting for network")
-        if not self.network_up.is_set():
-            raise FatalUploadError("Network unavailable for too long")
+        # Network is up, we can proceed safely without FatalUploadError
 
 # ==========================================
 # 7. ADAPTIVE CONTROLLER
@@ -387,6 +394,10 @@ class AdaptiveController:
             self.chunk_size = min(cfg.max_chunk_size, int(self.chunk_size * 1.25))
         elif self._speed_ema <= cfg.speed_slow_threshold:
             self.chunk_size = max(cfg.min_chunk_size, int(self.chunk_size * 0.75))
+        else:
+            # MEDIUM speed: gradually recover chunks that were shrunk
+            if self.chunk_size < cfg.initial_chunk_size and self._ok_streak >= 3:
+                self.chunk_size = min(cfg.initial_chunk_size, int(self.chunk_size * 1.10))
 
         if self.backpressure_delay > 0.0 and self._ok_streak >= 5:
             self.backpressure_delay = max(0.0, self.backpressure_delay * 0.6)
@@ -401,9 +412,14 @@ class AdaptiveController:
         self._ok_streak    = 0
         cfg                = self._cfg
 
-        self.chunk_size = max(cfg.min_chunk_size, int(self.chunk_size * 0.80))
+        # Only shrink chunks for non-network errors.
+        # Network errors are transient — don't permanently cripple chunk size.
+        if category != ErrorCategory.NETWORK:
+            self.chunk_size = max(cfg.min_chunk_size, int(self.chunk_size * 0.80))
 
-        if self._fail_streak >= 3 and self._workers > cfg.min_workers:
+        # Scale down workers only ONCE per failure burst (at exactly streak 3)
+        # Don't keep firing on streak 4, 5, 6... to prevent log spam
+        if self._fail_streak == 3 and self._workers > cfg.min_workers:
             self._workers -= 1
             log.warning("Scaled down workers", event="scale_down", workers=self._workers)
 
@@ -413,12 +429,18 @@ class AdaptiveController:
                 self.backpressure_delay * 2.0 if self.backpressure_delay > 0.0 else 1.0,
             )
 
-    def get_chunk_timeout(self) -> float:
+    def get_chunk_timeout(self, attempt: int = 0) -> float:
         cfg = self._cfg
         if self._speed_ema > 0.0:
             expected = self.chunk_size / self._speed_ema
-            return max(cfg.min_timeout, min(cfg.max_timeout, expected * 3.0))
-        return cfg.initial_timeout
+            base_timeout = max(cfg.min_timeout, min(cfg.max_timeout, expected * 3.0))
+        else:
+            base_timeout = cfg.initial_timeout
+            
+        # Cap the multiplier so high attempt counts don't create absurd timeouts
+        capped_attempt = min(attempt, 4)
+        multiplier = 1.5 ** capped_attempt
+        return min(cfg.max_timeout, base_timeout * multiplier)
 
     def get_speed_mbs(self) -> float:
         return round(self._speed_ema / (1024 * 1024), 2)
@@ -516,50 +538,46 @@ class TusClient:
     """
     HTTP/2 Tus protocol client with Zombie Socket Purging capabilities.
     """
-    def __init__(self, api_url: str, timeout: float, proxy_url: str = "") -> None:
+    def __init__(self, api_url: str, timeout: float = None, proxy_url: str = "") -> None:
         self.api_url = api_url if api_url.endswith("/") else api_url + "/"
         self._timeout = timeout
         self._proxy_url = proxy_url
-        self._build_client()
+        self._client = None
 
-    def _build_client(self) -> None:
-        limits = httpx.Limits(max_keepalive_connections=20, max_connections=50)
-        _proxy = (
-            self._proxy_url
-            or os.environ.get("HTTPS_PROXY")
-            or os.environ.get("HTTP_PROXY")
-            or os.environ.get("https_proxy")
-            or os.environ.get("http_proxy")
-            or ""
-        )
-        mounts = {}
-        if _proxy:
-            mounts = {
-                "https://": httpx.AsyncHTTPTransport(proxy=_proxy),
-                "http://":  httpx.AsyncHTTPTransport(proxy=_proxy),
+    def _get_client(self):
+        import httpx
+        if self._client is None:
+            custom_timeout = httpx.Timeout(connect=60.0, read=300.0, write=300.0, pool=15.0)
+            if self._timeout is not None:
+                custom_timeout = httpx.Timeout(connect=60.0, read=self._timeout, write=self._timeout, pool=15.0)
+            client_kwargs = {
+                "timeout": custom_timeout,
+                "http2": False,
+                "verify": False
             }
-        custom_timeout = httpx.Timeout(connect=60.0, read=300.0, write=300.0, pool=15.0)
-        self._client = httpx.AsyncClient(
-            http2    = False,
-            timeout=custom_timeout,
-            verify   = False,
-            limits   = limits,
-            mounts   = mounts if mounts else None,
-            follow_redirects = True
-        )
+            if self._proxy_url:
+                client_kwargs["mounts"] = {
+                    "http://": httpx.AsyncHTTPTransport(proxy=self._proxy_url),
+                    "https://": httpx.AsyncHTTPTransport(proxy=self._proxy_url)
+                }
+            self._client = httpx.AsyncClient(**client_kwargs)
+        return self._client
 
     async def reset_client(self) -> None:
-        """Destroys the zombie HTTP/2 connection pool and builds a fresh one."""
-        old_client = self._client
-        self._build_client()
-        # Cleanly close the old socket pool in the background so we don't freeze
-        try:
-            asyncio.create_task(old_client.aclose())
-        except Exception:
-            pass
+        """Destroys the connection pool and forces a fresh client on the next call."""
+        if self._client:
+            old_client = self._client
+            self._client = None
+            try:
+                import asyncio
+                asyncio.create_task(old_client.aclose())
+            except Exception:
+                pass
 
-    async def close(self) -> None:
-        await self._client.aclose()
+    async def close(self):
+        if self._client:
+            await self._client.aclose()
+            self._client = None
 
     async def create_session(self, total_size: int, filename: str, study_uid: str, mode: str) -> str:
         name_b64 = base64.b64encode(filename.encode()).decode()
@@ -576,10 +594,13 @@ class TusClient:
         
         if _api_key:
             headers["X-Api-Key"] = _api_key
+            headers["Password"] = _api_key
         if _api_user:
             headers["X-Api-User"] = _api_user
+            headers["Username"] = _api_user
 
-        resp = await self._client.post(self.api_url, headers=headers)
+        client = self._get_client()
+        resp = await client.post(self.api_url, headers=headers)
     
         if resp.status_code == 409:
             return ""    # Server says use existing session
@@ -608,10 +629,13 @@ class TusClient:
         
         if _api_key:
             headers["X-Api-Key"] = _api_key
+            headers["Password"] = _api_key
         if _api_user:
             headers["X-Api-User"] = _api_user
+            headers["Username"] = _api_user
 
-        resp = await self._client.head(upload_url, headers=headers)
+        client = self._get_client()
+        resp = await client.head(upload_url, headers=headers)
         
         
         if resp.status_code == 404:
@@ -625,15 +649,25 @@ class TusClient:
         
         if _api_key:
             headers["X-Api-Key"] = _api_key
+            headers["Password"] = _api_key
         if _api_user:
             headers["X-Api-User"] = _api_user
+            headers["Username"] = _api_user
             
+        import httpx
         kwargs = {}
         if timeout is not None:
-            kwargs["timeout"] = timeout
+            # FIX: Use a structured Timeout to give the server up to 120s to process the chunk internally, 
+            # while keeping the data 'write' timeout dynamic.
+            kwargs["timeout"] = httpx.Timeout(
+                connect=15.0, 
+                read=120.0, 
+                write=timeout, 
+                pool=15.0
+            )
             
-        # Passing timeout natively forces httpx to drop dead streams!
-        resp = await self._client.patch(upload_url, content=data, headers=headers, **kwargs)
+        client = self._get_client()
+        resp = await client.patch(upload_url, content=data, headers=headers, **kwargs)
         resp.raise_for_status()
         return dict(resp.headers)
 
@@ -653,10 +687,16 @@ class TusClient:
         try:
             headers = {"Tus-Resumable": "1.0.0"}
             _api_key = os.environ.get("TUS_API_KEY", "")
+            _api_user = os.environ.get("TUS_API_USER", "")
             if _api_key:
-              headers["X-Api-Key"] = _api_key
+                headers["X-Api-Key"] = _api_key
+                headers["Password"] = _api_key
+            if _api_user:
+                headers["X-Api-User"] = _api_user
+                headers["Username"] = _api_user
 
-            head = await self._client.head(upload_url, headers=headers)
+            client = self._get_client()
+            head = await client.head(upload_url, headers=headers)
             head.raise_for_status()
             server_offset = int(head.headers.get("Upload-Offset", 0))
             total_size    = int(head.headers.get("Upload-Length", 0))
@@ -682,7 +722,8 @@ class TusClient:
             if _api_key:
               headers["X-Api-Key"] = _api_key
 
-            resp = await self._client.get(verify_url, headers=headers, timeout=120.0)    # Computing MD5 server-side takes time on large files
+            client = self._get_client()
+            resp = await client.get(verify_url, headers=headers, timeout=120.0)    # Computing MD5 server-side takes time on large files
            
             if resp.status_code == 404:
                 log.warning(
@@ -755,17 +796,12 @@ class UploadContext:
 class UploadStrategy(ABC):
     def __init__(self, ctx: UploadContext) -> None:
         self.ctx  = ctx
-        # Create a standard adapter with the base logger, then wrap it in our new StructuredLogger
-        adapter = logging.LoggerAdapter(_base_log, {"correlation_id": ctx.correlation_id})
-        
-        self._log = StructuredLogger(adapter)
+        self._log = log
 
     async def _sleep_interruptible(self, delay: float) -> None:
-        if self.ctx.cancel_flag.is_set():
-            raise asyncio.CancelledError()
         try:
             await asyncio.wait_for(self.ctx.cancel_flag.wait(), timeout=delay)
-            raise asyncio.CancelledError("Cancelled during backoff")
+            raise asyncio.CancelledError()
         except asyncio.TimeoutError:
             pass
 
@@ -773,8 +809,6 @@ class UploadStrategy(ABC):
         self, attempt: int, error: Exception, context: str, category: ErrorCategory
     ) -> None:
         cfg = self.ctx.cfg
-        if attempt >= cfg.max_retries - 1:
-            return
             
         if category == ErrorCategory.NETWORK:
             # ── THE KILL SWITCH ──
@@ -782,10 +816,16 @@ class UploadStrategy(ABC):
             self._log.warning("Network drop detected. Purging dead sockets.", event="socket_purge")
             await self.ctx.tus.reset_client()
             await self.ctx.network_monitor.wait_for_network(self.ctx.cancel_flag)
+            # FIX: Restore exponential backoff for NETWORK errors to allow server-side ghost connection locks to naturally expire!
+            capped_attempt = min(attempt, 5)
+            delay = min(45.0, 2.0 * (2 ** capped_attempt)) + random.uniform(0, 1)
+        else:
+            # Non-network errors: exponential backoff, capped at 30s
+            capped_attempt = min(attempt, 4)  # Cap the exponent to prevent absurd delays
+            delay = min(30.0, 2.0 * (2 ** capped_attempt)) + random.uniform(0, 1)
             
-        delay = min(30.0, 2.0 * (2 ** attempt)) + random.uniform(0, 1)
         self._log.debug(
-            f"Retry {attempt + 1}/{cfg.max_retries} — {context}",
+            f"Retry {attempt + 1} - {context}",
             event="retry", attempt=attempt, delay=round(delay, 1),
             error_type=type(error).__name__, category=category.name,
         )
@@ -952,9 +992,15 @@ class ParallelUploader(UploadStrategy):
         }
 
         cfg = ctx.cfg
-        for attempt in range(cfg.max_retries):
+        attempt = 0
+        cat = ErrorCategory.NETWORK
+        while True:
             if ctx.cancel_flag.is_set():
                 raise asyncio.CancelledError()
+                
+            # --- ANTI-ZOMBIE LOCK CHECK ---
+            if os.path.exists(ctx.file_path + ".deleted"):
+                raise asyncio.CancelledError("Study deleted")
 
             await ctx.rate_limiter.acquire(len(chunk_data))
 
@@ -965,7 +1011,7 @@ class ParallelUploader(UploadStrategy):
             try:
                 async with semaphore:
                     t0            = time.monotonic()
-                    chunk_timeout = ctx.controller.get_chunk_timeout()
+                    chunk_timeout = ctx.controller.get_chunk_timeout(attempt)
                     
                     # ── NATIVE TIMEOUT HANDLING ──
                     resp_headers = await ctx.tus.upload_chunk(
@@ -1003,6 +1049,7 @@ class ParallelUploader(UploadStrategy):
                 ctx.controller.record_chunk_failure(cat)
                 metrics.record_retry()
                 await self._backoff(attempt, exc, "Chunk timeout", cat)
+                attempt += 1
 
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code
@@ -1011,6 +1058,7 @@ class ParallelUploader(UploadStrategy):
                     ctx.controller.record_chunk_failure(cat)
                     metrics.record_retry()
                     await self._backoff(attempt, exc, f"Server overload HTTP {status}", cat)
+                    attempt += 1
                 elif status == 409:
                     metrics.add_bytes(len(chunk_data))
                     async with buffer_lock:
@@ -1025,12 +1073,14 @@ class ParallelUploader(UploadStrategy):
                 metrics.record_retry()
                 self._log.warning(str(exc), event="checksum_mismatch", chunk_idx=chunk_idx, attempt=attempt)
                 await self._backoff(attempt, exc, "Checksum mismatch", ErrorCategory.CHECKSUM)
+                attempt += 1
 
-            except (httpx.RequestError, httpx.TimeoutException) as exc:
-                cat = classify_error(exc)
+            except (httpx.RequestError, httpx.TimeoutException, OSError, ConnectionError) as exc:
+                cat = ErrorCategory.NETWORK
                 ctx.controller.record_chunk_failure(cat)
                 metrics.record_retry()
                 await self._backoff(attempt, exc, "Network error", cat)
+                attempt += 1
 
             except (FileAccessError, DiskFullError, FatalUploadError):
                 raise    # Do not retry unrecoverable local errors
@@ -1038,8 +1088,11 @@ class ParallelUploader(UploadStrategy):
             except Exception as exc:
                 ctx.controller.record_chunk_failure(ErrorCategory.FATAL)
                 await self._backoff(attempt, exc, "Unknown error", ErrorCategory.FATAL)
-
-        raise FatalUploadError(f"Max retries exhausted for chunk {chunk_idx}")
+                attempt += 1
+                
+            # Non-network errors can still exhaust after max_retries
+            if attempt >= ctx.cfg.max_retries and cat != ErrorCategory.NETWORK:
+                raise FatalUploadError(f"Max retries exhausted for chunk {chunk_idx}")
 
 
 # ==========================================
@@ -1078,6 +1131,11 @@ class SequentialUploader(UploadStrategy):
             while offset < ctx.total_size:
                 if ctx.cancel_flag.is_set():
                     raise asyncio.CancelledError()
+                
+                # --- ANTI-ZOMBIE LOCK CHECK ---
+                if os.path.exists(ctx.file_path + ".deleted"):
+                    self._log.warning("Study was deleted from UI! Self-destructing upload session.", event="zombie_aborted")
+                    raise asyncio.CancelledError("Study deleted")
 
                 # ── FIX 3: guard chunk read ────────────────────────────────
                 try:
@@ -1104,9 +1162,15 @@ class SequentialUploader(UploadStrategy):
                     "Content-Type":    "application/offset+octet-stream",
                 }
 
-                for attempt in range(ctx.cfg.max_retries):
+                attempt = 0
+                cat = ErrorCategory.NETWORK
+                while True:
                     if ctx.cancel_flag.is_set():
                         raise asyncio.CancelledError()
+
+                    # --- ANTI-ZOMBIE LOCK CHECK ---
+                    if os.path.exists(ctx.file_path + ".deleted"):
+                        raise asyncio.CancelledError("Study deleted")
 
                     await ctx.rate_limiter.acquire(len(chunk_data))
 
@@ -1115,7 +1179,7 @@ class SequentialUploader(UploadStrategy):
 
                     try:
                         t0            = time.monotonic()
-                        chunk_timeout = ctx.controller.get_chunk_timeout()
+                        chunk_timeout = ctx.controller.get_chunk_timeout(attempt)
                         
                         # ── NATIVE TIMEOUT HANDLING ──
                         resp_headers = await ctx.tus.upload_chunk(
@@ -1147,6 +1211,7 @@ class SequentialUploader(UploadStrategy):
                         ctx.controller.record_chunk_failure(cat)
                         metrics.record_retry()
                         await self._backoff(attempt, exc, "Chunk timeout", cat)
+                        attempt += 1 # Will retry indefinitely if network drops
 
                     except httpx.HTTPStatusError as exc:
                         status = exc.response.status_code
@@ -1155,6 +1220,7 @@ class SequentialUploader(UploadStrategy):
                             ctx.controller.record_chunk_failure(cat)
                             metrics.record_retry()
                             await self._backoff(attempt, exc, f"Server overload HTTP {status}", cat)
+                            attempt += 1
                         elif status == 409:
                             self._log.warning("Offset mismatch (409) — reconciling", event="offset_reconcile")
                             new_offset = await ctx.tus.verify_session(ctx.upload_url)
@@ -1178,12 +1244,10 @@ class SequentialUploader(UploadStrategy):
                         metrics.record_retry()
                         self._log.warning(str(exc), event="checksum_mismatch", attempt=attempt)
                         await self._backoff(attempt, exc, "Checksum mismatch", ErrorCategory.CHECKSUM)
+                        attempt += 1
 
                     except (httpx.RequestError, httpx.TimeoutException, OSError, ConnectionError) as exc:
-                        # ── INTERFACE SWITCH FIX ──
-                        # Force all violent OS-level socket drops to be treated as recoverable network events
-                        # This guarantees 'reset_client()' will run and rebuild the pool on the new Wi-Fi adapter
-                        cat = ErrorCategory.NETWORK  
+                        cat = ErrorCategory.NETWORK
                         ctx.controller.record_chunk_failure(cat)
                         metrics.record_retry()
                         
@@ -1192,6 +1256,30 @@ class SequentialUploader(UploadStrategy):
                             event="adapter_switch"
                         )
                         await self._backoff(attempt, exc, "Hard Network Switch", cat)
+                        
+                        # --- FIX: PRE-RETRY OFFSET RECONCILIATION ---
+                        # Verify if the server actually saved the chunk before the network dropped!
+                        try:
+                            self._log.info("Checking server offset before retry...", event="pre_retry_check")
+                            reconciled_offset = await ctx.tus.verify_session(ctx.upload_url)
+                            if reconciled_offset > offset:
+                                self._log.warning(f"Chunk succeeded despite timeout! Skipping forward from {offset} to {reconciled_offset}.", event="ghost_success")
+                                confirmed_end = min(len(chunk_data), reconciled_offset - offset)
+                                hasher.update(chunk_data[:confirmed_end])
+                                if reconciled_offset > offset + len(chunk_data):
+                                    gap_start = offset + len(chunk_data)
+                                    await f.seek(gap_start)
+                                    gap = await f.read(reconciled_offset - gap_start)
+                                    if gap:
+                                        hasher.update(gap)
+                                offset = reconciled_offset
+                                await f.seek(reconciled_offset)
+                                # The chunk succeeded! Break out of the retry loop and fetch the next chunk!
+                                break
+                        except Exception as recon_exc:
+                            self._log.warning(f"Offset reconciliation failed, will retry chunk normally: {recon_exc}", event="recon_failed")
+                            
+                        attempt += 1 # Network errors retry infinitely (attempt limit only applies to _backoff delay cap)
 
                     except (FileAccessError, DiskFullError, FatalUploadError):
                         raise
@@ -1199,8 +1287,11 @@ class SequentialUploader(UploadStrategy):
                     except Exception as exc:
                         ctx.controller.record_chunk_failure(ErrorCategory.FATAL)
                         await self._backoff(attempt, exc, "Unknown error", ErrorCategory.FATAL)
-                else:
-                    raise FatalUploadError(f"Sequential upload permanently failed at offset {offset}")
+                        attempt += 1
+
+                    # Non-network errors can still exhaust after max_retries
+                    if attempt >= ctx.cfg.max_retries and cat != ErrorCategory.NETWORK:
+                        raise FatalUploadError(f"Sequential upload permanently failed at offset {offset}")
 
         return hasher.hexdigest()
 
@@ -1222,7 +1313,7 @@ class EnterpriseUploadEngine:
         self.ledger       = ledger
         self.cfg          = cfg
         self.controller   = AdaptiveController(cfg)
-        self.net_monitor  = NetworkMonitor(cfg)
+        self.net_monitor  = NetworkMonitor(cfg, api_url)
         self.rate_limiter = TokenBucketRateLimiter(cfg.rate_limit_bps)
         self.cancel_flag  = asyncio.Event()
 
@@ -1543,7 +1634,7 @@ class EnterpriseUploadEngine:
                     # Assuming your ledger is stored in a file like 'tus_ledger.db'
                     ledger_path = getattr(self.ledger, 'db_path', 'tus_ledger.db') 
                     with sqlite3.connect(ledger_path, timeout=10) as heal_conn:
-                        heal_conn.execute("DELETE FROM upload_ledger WHERE file_path = ?", (file_path,))
+                        heal_conn.execute("DELETE FROM tus_uploads WHERE file_path = ?", (file_path,))
                         heal_conn.commit()
                     log.info(f"✅ Auto-heal successful. Corrupted session wiped for {os.path.basename(file_path)}")
                 except Exception as db_err:
@@ -1560,6 +1651,11 @@ class EnterpriseUploadEngine:
                     await hash_task
                 except (asyncio.CancelledError, Exception):
                     pass
+            
+            try:
+                await self.tus.close()
+            except Exception:
+                pass
 
         log.critical(
             "All session retries exhausted",
@@ -1568,3 +1664,222 @@ class EnterpriseUploadEngine:
             correlation_id=correlation_id,
         )
         return False
+
+# ==========================================
+# ENTERPRISE PIPELINE WORKER INTEGRATION
+# ==========================================
+import queue
+import threading
+from flask import Flask
+from core.event_bus import upload_queue, db_write_queue, DBWriteEvent
+from core.state_machine import PipelineStatus
+from core.database import PatientStudy, InstitutionMapping, db
+from logger import get_enterprise_logger
+log_worker = get_enterprise_logger("UploadWorker")
+
+_global_active_uploads_set = set()
+_global_active_uploads_lock = threading.Lock()
+
+def upload_zip_with_backoff(zip_path: str, study_uid: str, api_url: str, api_user: str, api_key: str) -> bool:
+    import asyncio
+    import os
+    os.environ["TUS_API_USER"] = api_user
+    os.environ["TUS_API_KEY"] = api_key
+    
+    cfg = UploadConfig()
+    ledger = UploadLedger()
+    engine = EnterpriseUploadEngine(ledger=ledger, cfg=cfg, api_url=api_url, mode_override="sequential")
+    try:
+        success = asyncio.run(engine.process_upload(zip_path, study_uid))
+        return success
+    except Exception as e:
+        log_worker.error(f"Upload wrapper failed: {e}")
+        return False
+
+class UploadWorkerService(threading.Thread):
+    def __init__(self, app: Flask):
+        super().__init__(name="UploadWorkerService", daemon=True)
+        self.app = app
+        self._shutdown_flag = threading.Event()
+
+    def shutdown(self):
+        self._shutdown_flag.set()
+
+    def run(self):
+        log_worker.info("UploadWorkerService started. Listening on upload_queue.")
+        while not self._shutdown_flag.is_set():
+            try:
+                payload = upload_queue.get(timeout=2.0)
+            except queue.Empty:
+                continue
+
+            if getattr(payload, 'action', '') == "SHUTDOWN" or payload == "SHUTDOWN":
+                upload_queue.task_done()
+                break
+
+            try:
+                self._process_upload(payload)
+            except Exception as e:
+                log_worker.error(f"Error processing upload task: {e}", exc_info=True)
+            finally:
+                upload_queue.task_done()
+
+    def _process_upload(self, payload: dict):
+        zip_path = payload.get('zip_path')
+        study_uid = payload.get('study_uid')
+        chunk_count = payload.get('image_count')
+
+        if not zip_path or not os.path.exists(zip_path):
+            return
+
+        with _global_active_uploads_lock:
+            if zip_path in _global_active_uploads_set:
+                return
+            _global_active_uploads_set.add(zip_path)
+
+        try:
+            should_upload = False
+            with self.app.app_context():
+                study = db.session.get(PatientStudy, study_uid)
+                if not study:
+                    return
+
+                mapping = InstitutionMapping.query.filter_by(dicom_institution_name=study.institution_name).first()
+
+                if not mapping or not mapping.center:
+                    if study.remote_upload_id != "UNMAPPED_CENTER":
+                        db_write_queue.put(DBWriteEvent(
+                            action="update_study_remote_id",
+                            payload={'study_uid': study_uid, 'remote_upload_id': 'UNMAPPED_CENTER', 'upload_status': PipelineStatus.FAILED}
+                        ))
+                    
+                    # Requeue with a 10s delay (timer thread)
+                    def delayed_requeue():
+                        upload_queue.put(payload)
+                    threading.Timer(10.0, delayed_requeue).start()
+                else:
+                    correct_remote_id = str(mapping.center_id)
+                    if study.remote_upload_id in ["UNMAPPED_CENTER", "", None] or study.remote_upload_id != correct_remote_id:
+                        db_write_queue.put(DBWriteEvent(
+                            action="update_study_remote_id",
+                            payload={'study_uid': study_uid, 'remote_upload_id': correct_remote_id, 'upload_status': PipelineStatus.PENDING}
+                        ))
+                    should_upload = True
+
+            if not should_upload:
+                return
+
+            log_worker.info(f"Streaming ZIP chunk to cloud...", extra={"zip_file": os.path.basename(zip_path)})
+
+            with self.app.app_context():
+                fresh_url = get_system_setting('TUS_API_URL', 'http://127.0.0.1:1080/files/')
+                fresh_user = get_system_setting('TUS_API_USER', 'unconfigured_user')
+                fresh_key = get_system_setting('TUS_API_KEY', '')
+
+            # upload_zip_with_backoff is already defined in this file
+            success = upload_zip_with_backoff(zip_path, study_uid, fresh_url, fresh_user, fresh_key)
+            
+            if success:
+                db_write_queue.put(DBWriteEvent(
+                    action="update_upload_success",
+                    payload={'study_uid': study_uid, 'image_count': chunk_count}
+                ))
+                # Delete archive
+                try:
+                    if os.path.exists(zip_path):
+                        os.remove(zip_path)
+                except Exception as e:
+                    log_worker.warning(f"Could not delete archive {zip_path}: {e}")
+            else:
+                db_write_queue.put(DBWriteEvent(
+                    action="update_status",
+                    payload={'entity_type': 'study', 'uid': study_uid, 'status_field': 'upload_status', 'status': PipelineStatus.FAILED}
+                ))
+                try:
+                    if os.path.exists(zip_path):
+                        failed_path = zip_path + ".failed"
+                        import shutil
+                        shutil.move(zip_path, failed_path)
+                        log_worker.info(f"Moved failed archive to {failed_path}")
+                except Exception as e:
+                    log_worker.warning(f"Could not move failed archive {zip_path}: {e}")
+
+        finally:
+            with _global_active_uploads_lock:
+                _global_active_uploads_set.discard(zip_path)
+import glob
+import re
+
+class UploadWatchdogService(threading.Thread):
+    def __init__(self, app: Flask):
+        super().__init__(name="UploadWatchdog", daemon=True)
+        self.app = app
+        self._shutdown_flag = threading.Event()
+
+    def shutdown(self):
+        self._shutdown_flag.set()
+
+    def run(self):
+        log_worker.info("UploadWatchdogService started. Monitoring for stranded uploads.")
+        from config import Config
+        while not self._shutdown_flag.is_set():
+            time.sleep(30) # Run every 30 seconds
+            try:
+                outbound_base = getattr(Config, 'OUTGOING_FOLDER', 'data/outgoing')
+                if not os.path.exists(outbound_base):
+                    continue
+                    
+                # Find all .zip, .zip.failed, and .zip.streaming files
+                zip_files = glob.glob(os.path.join(outbound_base, "*.zip*"))
+                for zip_path in zip_files:
+                    filename = os.path.basename(zip_path)
+                    
+                    # Recover stranded files by renaming them back to .zip
+                    if filename.endswith('.streaming'):
+                        new_path = zip_path.replace('.streaming', '')
+                        try:
+                            import shutil
+                            shutil.move(zip_path, new_path)
+                            zip_path = new_path
+                            filename = os.path.basename(zip_path)
+                            log_worker.info(f"Recovered stranded file to {zip_path}")
+                        except Exception as e:
+                            log_worker.warning(f"Could not recover stranded file {zip_path}: {e}")
+                            continue
+                    elif filename.endswith('.failed'):
+                        # Only recover .failed files older than 5 minutes (give system time to stabilize)
+                        if (time.time() - os.path.getmtime(zip_path)) < 300:
+                            continue
+                        new_path = zip_path.replace('.failed', '')
+                        try:
+                            import shutil
+                            shutil.move(zip_path, new_path)
+                            zip_path = new_path
+                            filename = os.path.basename(zip_path)
+                            log_worker.info(f"Recovered stranded file to {zip_path}")
+                        except Exception as e:
+                            log_worker.warning(f"Could not recover stranded file {zip_path}: {e}")
+                            continue
+                            
+                    # Skip any files that are not strictly .zip after recovery attempt
+                    if not filename.endswith('.zip'):
+                        continue
+                    
+                    # Parse filename: Modality_StudyUID_contains_COUNT_images_TIMESTAMP.zip
+                    match = re.search(r'_(.+?)_contains_(\d+)_images_', filename)
+                    if not match:
+                        continue
+                        
+                    study_uid = match.group(1)
+                    image_count = int(match.group(2))
+                    
+                    # Push to queue!
+                    payload = {
+                        'zip_path': zip_path,
+                        'study_uid': study_uid,
+                        'image_count': image_count
+                    }
+                    upload_queue.put(payload)
+                    
+            except Exception as e:
+                log_worker.error(f"Watchdog error: {e}", exc_info=True)

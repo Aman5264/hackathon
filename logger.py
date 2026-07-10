@@ -12,7 +12,8 @@ def create_handler(filename, level):
     path = os.path.join(LOG_BASE_DIR, filename)
     
     # --- ENTERPRISE FIX: Replaced standard handler with Concurrent handler ---
-    handler = ConcurrentRotatingFileHandler(path, maxBytes=10*1024*1024, backupCount=5)
+    # Max size 2.5 MB per file, keep 1 backup -> Total 5 MB max
+    handler = ConcurrentRotatingFileHandler(path, maxBytes=int(2.5*1024*1024), backupCount=1)
     
     handler.setLevel(level)
     
@@ -35,11 +36,12 @@ def get_enterprise_logger(module_name):
     if logger.hasHandlers():
         return logger
     
-    logger.setLevel(logging.INFO)
+    # Only log WARNING, ERROR, and CRITICAL for production
+    logger.setLevel(logging.WARNING)
 
     # --- 1. ROUTING BY MODULE (Where it came from) ---
     module_file = f"modules/{module_name.lower()}.json.log"
-    logger.addHandler(create_handler(module_file, logging.INFO))
+    logger.addHandler(create_handler(module_file, logging.WARNING))
 
     # --- 2. ROUTING BY LEVEL (Severity) ---
     # ERROR FILE (Catches ERROR and CRITICAL)

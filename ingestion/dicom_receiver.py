@@ -1,7 +1,9 @@
 import os
+import queue
 from pynetdicom import AE, evt,  debug_logger
 from pynetdicom.sop_class import Verification
-from database import db, queue_study_update, file_lock, AllowedScanner, AllowedModality, db_lock, PatientStudy, PipelineStatus, get_system_setting
+from core.database import db, AllowedScanner, AllowedModality, PatientStudy, PipelineStatus, get_system_setting
+from core.event_bus import db_write_queue, DBWriteEvent
 import time
 from pynetdicom.presentation import AllStoragePresentationContexts, build_context
 import shutil
@@ -16,13 +18,15 @@ from pydicom.uid import (
     JPEGLosslessSV1,
     JPEG2000Lossless,
     JPEG2000,
-    JPEGLosslessP14,
     RLELossless,
 )
 from logger import get_enterprise_logger
 from systemProfile import SystemProfile
 from pydicom.valuerep import PersonName
 from datetime import datetime
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from services.metadata_engine import engine as metadata_engine
 debug_logger()
 log = get_enterprise_logger("ReceiverThread")
 
@@ -31,7 +35,7 @@ _modality_cache = set()
 _modality_cache_time = 0
 _CACHE_TTL = 60  # Refresh every 60 seconds
 _cache_lock = Lock()
-
+file_save_lock = Lock()
 
 
 
@@ -59,6 +63,10 @@ def is_modality_allowed(mod, app):
                     log.info( "Modality whitelist updated in RAM", extra={"modality_cache": list(_modality_cache)})
 
     # 4. Check the RAM cache (Instantaneous)
+    # ALWAYS allow Presentation States, Structured Reports, and Key Objects
+    if mod.upper() in ["PR", "SR", "KO"]:
+        return True
+        
     return mod.upper() in _modality_cache
 
 
@@ -74,6 +82,7 @@ def invalidate_modality_cache():
 def is_disk_safe():
     """Checks if the drive has enough room for new associations."""
     # Check the drive where images are stored
+    os.makedirs(Config.INCOMING_FOLDER, exist_ok=True)
     total, used, free = shutil.disk_usage(Config.INCOMING_FOLDER)
     
     percent_free = (free / total) * 100
@@ -143,15 +152,10 @@ def validate_dicom_payload(ds):
   
    # THE FIX: Check the dataset dictionary keys. 
     # Validates existence without loading the payload into RAM.
-    if 'PixelData' not in ds:
-        log.warning("Validation failed: DICOM is missing PixelData payload.")
-        return "CORRUPT"
-
     required_metadata = {
         "PatientName": "Patient Name",
         "StudyDate": "Study Date",
-        "Modality": "Modality",
-        "InstitutionName": "Center Name"
+        "Modality": "Modality"
     }
 
     # Loop through our strict requirements
@@ -184,6 +188,37 @@ def extract_list_string(ds, tag_name):
     return str(val)
 # --------------------------------------
 
+
+def _quarantine_payload(ds, instance_uid, reason_msg):
+    # Save to Error Folder safely
+    from config import Config
+    error_dir = getattr(Config, 'ERROR_FOLDER', './error_data') 
+    import os, time
+    os.makedirs(error_dir, exist_ok=True)
+    error_filepath = os.path.join(error_dir, instance_uid + '.dcm')
+    
+    if not os.path.exists(error_filepath):
+        temp_error = error_filepath + '.tmp'
+        try:
+            ds.save_as(temp_error, write_like_original=False)
+            # Robust atomic rename for Windows
+            rename_success = False
+            for attempt in range(3):
+                try:
+                    os.rename(temp_error, error_filepath)
+                    rename_success = True
+                    break
+                except OSError:
+                    if os.path.exists(error_filepath):
+                        rename_success = True
+                        break
+                    time.sleep(0.01)
+            
+            if not rename_success:
+                pass
+        except Exception as e:
+            pass
+
 def handle_store(event, app):
     """Handle a C-STORE request event safely across multiple threads."""
 
@@ -202,18 +237,7 @@ def handle_store(event, app):
 
     elif status == "QUARANTINE":
         log.warning("Payload quarantined due to missing metadata", extra={"sop_instance_uid": instance_uid, "reason": msg})
-        
-        # Save to Error Folder safely
-        error_dir = getattr(Config, 'ERROR_FOLDER', './error_data') 
-        os.makedirs(error_dir, exist_ok=True)
-        error_filepath = os.path.join(error_dir, instance_uid + '.dcm')
-        
-        with file_lock:
-            if not os.path.exists(error_filepath):
-                temp_error = error_filepath + '.tmp'
-                ds.save_as(temp_error, write_like_original=False)
-                os.rename(temp_error, error_filepath)
-                
+        _quarantine_payload(ds, instance_uid, msg)
         return 0x0000
     
 
@@ -229,21 +253,7 @@ def handle_store(event, app):
     # --- THE GATEKEEPER: Pure Image-Level Deduplication ---
     # =================================================================
     sop_uid = str(ds.SOPInstanceUID)
-    
-    with app.app_context():
-        with db_lock:
-            # 1. Ask the database if we have EVER received this exact image before 
-            from database import ImageInstance
-            existing_image = ImageInstance.query.filter_by(sop_uid=sop_uid).first()
-            
-            if existing_image:
-                # 2. If we already have it, drop it and tell the scanner "Success" 
-                # so the scanner moves on to the next file without retrying.
-                log.info(f"🛑 Dropped duplicate. Image already exists on disk: {sop_uid}")
-                return 0x0000 
-                
-            # 3. If the image is NOT in the database, we accept it. 
-            # The code simply continues downwards to save the file...
+    # Deduplication moved to the asynchronous DatabaseWriter thread to eliminate SQLite locks.
     # =================================================================
     # 2. EXTRACT CORE FIELDS (Needed for path creation and modality checks)
     p_name_raw = getattr(ds, "PatientName", "Unknown")
@@ -255,11 +265,12 @@ def handle_store(event, app):
 
 
 
-    with app.app_context():
-       
-      if not is_modality_allowed(mod, app):
-        log.warning("Payload rejected, unauthorized modality", extra={"modality": mod})
-        return 0xC000 
+    # We do NOT need to push a Flask app_context here because is_modality_allowed
+    # relies on a lightning-fast RAM cache, and pushes its own context ONLY if needed.
+    if not is_modality_allowed(mod, app):
+        log.warning("Payload quarantined due to unauthorized modality", extra={"modality": mod})
+        _quarantine_payload(ds, instance_uid, "unauthorized modality")
+        return 0x0000 
         
     log.info("Modality approved", extra={"modality": mod})
     enterprise_filename = f"{mod}.{instance_uid}.dcm"
@@ -281,27 +292,50 @@ def handle_store(event, app):
     log.info("SOP approved", extra={"modality": mod})
 
    
-    with file_lock:
-
+    try:
         if os.path.exists(final_incoming):
             log.info("Race condition averted during incoming save", extra={"sop_instance_uid": instance_uid})
             return 0x0000
         
-       # --- 1. THE INCOMING FOLDER ---
-        temp_incoming = final_incoming + '.tmp'
+        # --- 1. THE INCOMING FOLDER ---
+        import uuid
+        unique_id = uuid.uuid4().hex
+        temp_incoming = final_incoming + f".tmp_{unique_id}"
         ds.save_as(temp_incoming, write_like_original=False)
-        # os.rename(temp_incoming, final_incoming)
+        
+        # --- THE FIX: Robust retry logic for Windows file locks (e.g. Defender) ---
+        rename_success = False
+        for attempt in range(20): # Increased to 20 attempts
+            try:
+                os.rename(temp_incoming, final_incoming)
+                rename_success = True
+                break
+            except OSError:
+                if os.path.exists(final_incoming):
+                    rename_success = True
+                    break
+                time.sleep(0.05) # 50ms sleep * 20 = 1 full second
+                
+        if not rename_success:
+            raise OSError("Atomic rename failed after 20 attempts due to file locks.")
+    except Exception as e:
+        log.error(f"Error saving incoming file: {e}")
+        return 0xC000
 
-        # --- 2. THE BACKUP FOLDER ---
+    # --- 2. THE BACKUP FOLDER ---
+    def _background_backup():
         if os.path.exists(final_backup):
             log.info("Duplicate backup payload skipped", extra={"sop_instance_uid": instance_uid})
         else:
             try:
-                temp_backup = final_backup + '.tmp'
-                shutil.copyfile(temp_incoming, temp_backup)
+                temp_backup = final_backup + f".tmp_{unique_id}"
+                shutil.copyfile(final_incoming, temp_backup)
                 os.rename(temp_backup, final_backup)
             except Exception as e:
                 log.error("Failed to save payload to backup archive", exc_info=True)
+                
+    import threading
+    threading.Thread(target=_background_backup, daemon=True).start()
         
     
     
@@ -321,7 +355,7 @@ def handle_store(event, app):
         'patient_birth_date': str(getattr(ds, "PatientBirthDate", "")),
         'modality': mod,
         'study_date': s_date,
-        'study_description': str(getattr(ds, "StudyDescription", "")),
+        'study_description': metadata_engine.extract_best_study_description(ds),
         'institution_name': str(getattr(ds, "InstitutionName", "")),
         'ref_physician_name': str(getattr(ds, "ReferringPhysicianName", "")).replace('^', ' '),
         
@@ -361,21 +395,26 @@ def handle_store(event, app):
         'high_bit': str(getattr(ds, "HighBit", ""))
     }
 
-    success = queue_study_update(payload)
-   
-    if not success:
-        # Return a Failure Code to the scanner if the server is overwhelmed
-        return 0xC000 
-        
-    # Return Success Code!
+    # --- THE FIX: Enforce a strict timeout so we never block the association ---
+    try:
+        db_write_queue.put(DBWriteEvent(action='insert_dicom', payload=payload), block=True, timeout=1.0)
+    except queue.Full:
+        log.error("CRITICAL: Database queue is full! Rejecting DICOM file to prevent association hang.", extra={"sop_uid": instance_uid})
+        # If we return a failure, the scanner will naturally queue it and retry later!
+        if os.path.exists(temp_incoming):
+            try: os.remove(temp_incoming)
+            except OSError: pass
+        return 0xC000
+    
     return 0x0000
 
 def security_bouncer(event, app):
     """The Diagnostic Bouncer: Tells you EXACTLY what is failing."""
     try:
         # --- DISK SPACE PRE-CHECK ---
-        from receiver import is_disk_safe 
-        if not is_disk_safe():
+        from systemProfile import SystemProfile
+        from config import Config
+        if not SystemProfile.has_sufficient_disk(Config.INCOMING_FOLDER):
             log.warning("Rejecting association: Disk space below 5%")
             event.assoc.abort() 
             return
@@ -391,7 +430,7 @@ def security_bouncer(event, app):
 
         # 2. Open a secure window into the Flask Database
         with app.app_context():
-            from database import AllowedScanner, SystemSetting
+            from core.database import AllowedScanner, SystemSetting
             from sqlalchemy import func
             
             # ==========================================================
@@ -433,6 +472,14 @@ def security_bouncer(event, app):
         
     
 
+def safe_handle_store(event, app):
+    """Failsafe wrapper for the C-STORE handler to prevent thread crashes."""
+    try:
+        return handle_store(event, app)
+    except Exception as e:
+        log.error(f"Catastrophic failure in handle_store: {e}", exc_info=True)
+        return 0xC000
+
 
 
 def start_dicom_server(app):
@@ -445,7 +492,7 @@ def start_dicom_server(app):
     # =================================================================
     try:
         with app.app_context():
-            from database import get_system_setting
+            from core.database import get_system_setting
             live_ae_title = get_system_setting('DICOM_AE_TITLE', 'ICARE_STORE')
             live_port = int(get_system_setting('DICOM_PORT', 11114))
             live_host = get_system_setting('HOST', '0.0.0.0')
@@ -459,11 +506,7 @@ def start_dicom_server(app):
     # =================================================================
     ae = AE(ae_title=live_ae_title)
     
-    if SystemProfile.is_legacy_node():
-        ae.maximum_associations = 2  # Pentium mode: Prevent RAM exhaustion
-        log.warning("Legacy hardware detected: Network connections throttled to 2 for stability.")
-    else:
-        ae.maximum_associations = live_max_conn
+    ae.maximum_associations = live_max_conn
 
     # =================================================================
     # 3. UNIVERSAL TRANSFER SYNTAXES
@@ -473,11 +516,10 @@ def start_dicom_server(app):
         ExplicitVRLittleEndian, # Default Uncompressed
         ExplicitVRBigEndian,    # Default Uncompressed
         JPEGBaseline8Bit,       # Lossy JPEG (Web viewing)
-        JPEGExtended12Bit,      # Lossy JPEG (Medical grade)
+        JPEGExtended12Bit,      # 12-bit JPEG Lossy
         JPEGLosslessSV1,        # Lossless JPEG (Most common scanner format)
-        JPEG2000Lossless,       # Modern Lossless (Highly compressed)
-        JPEG2000,
-        JPEGLosslessP14,           # Modern Lossy
+        JPEG2000Lossless,       # Lossless JPEG 2000
+        JPEG2000,               # Modern Lossy
         RLELossless             # Run-Length Encoding (Used in Ultrasounds)
     ]
 
@@ -495,7 +537,7 @@ def start_dicom_server(app):
     handlers = [
         (evt.EVT_ACCEPTED, handle_accepted),
         (evt.EVT_ACCEPTED, security_bouncer, [app]),
-        (evt.EVT_C_STORE, handle_store, [app]),
+        (evt.EVT_C_STORE, safe_handle_store, [app]),
         (evt.EVT_RELEASED, handle_released)
     ]
     
@@ -520,7 +562,6 @@ def start_dicom_server(app):
 
 def stop_dicom_server():
     """Politely stops listening for new machines, but lets current transfers finish."""
-    global server
     if server:
         log.info("DICOM receiver shutting down, locking associations")
         # This brilliant built-in function safely stops the non-blocking server!
@@ -537,8 +578,8 @@ def dicom_watchdog_loop(app):
         time.sleep(30) 
         
         # We only monitor if we aren't in the middle of a graceful shutdown
-        from app import is_shutting_down 
-        if is_shutting_down:
+        import app as app_module
+        if app_module.is_shutting_down:
             break
 
         is_alive = False

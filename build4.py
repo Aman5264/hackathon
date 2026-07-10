@@ -18,26 +18,34 @@ def build_app():
     
     cmd = [
         sys.executable, "-m", "nuitka",
-        "--standalone",               # <--- Forces the "One-Dir" build (creates app.dist)
+        "--standalone",               
         "--assume-yes-for-downloads", 
         
         # ==========================================
-        # 1. UI & OS CONFIGURATION (WITH NEW METADATA)
+        # 1. UI & OS CONFIGURATION
         # ==========================================
-        "--windows-console-mode=disable",  
-        "--windows-icon-from-ico=assets/icon.ico", # <--- Embeds the icon into the app.exe file
+        "--windows-console-mode=disable",          
+        "--windows-icon-from-ico=assets/icon.ico",
+        "--include-data-file=modality_rules.json=modality_rules.json", 
         
-        # --- NEW METADATA & COMPILER FLAGS ---
-        
-        "--enable-plugin=anti-bloat",
+        # --- METADATA FLAGS ---
         "--company-name=Icare Infosystem Pvt. Ltd.",
         "--product-name=Icare DICOM Uploader",
-        "--file-version=1.0.0.0",
+        "--file-version=2.0.0.0",
         "--product-version=1.0.0.0",
         "--copyright=Copyright (c) 2026 Icare Infosystem",
         
         # ==========================================
-        # 2. EXTERNAL DATA & ASSETS
+        # 2. PLUGINS & COMPILE BYPASSES
+        # ==========================================
+        "--enable-plugin=anti-bloat",
+        "--no-deployment-flag=excluded-module-usage",  
+        
+        # 🚨 THE ULTIMATE OVERRIDE: Shut off Nuitka's auto-detect so it stops conflicting with us
+        "--disable-plugin=pywebview", 
+        
+        # ==========================================
+        # 3. EXTERNAL DATA & ASSETS
         # ==========================================
         "--include-data-dir=tools=tools",          
         "--include-data-dir=templates=templates",  
@@ -45,7 +53,7 @@ def build_app():
         "--include-data-file=.env=.env",           
         
         # ==========================================
-        # 3. HIDDEN IMPORTS & PACKAGES
+        # 4. HIDDEN IMPORTS & CORE PACKAGES
         # ==========================================
         "--include-package=sqlalchemy",
         "--include-package=flask",
@@ -57,7 +65,18 @@ def build_app():
         "--include-package-data=pynetdicom",
         
         # ==========================================
-        # 4. ENTRY POINT
+        # 5. SURGICAL PYWEBVIEW DEPENDENCY INCLUSION
+        # ==========================================
+        "--include-module=webview",
+        "--include-module=webview.util",
+        "--include-module=webview.menu",
+        "--include-module=webview.platforms",
+        "--include-module=webview.platforms.win32",    
+        "--include-module=webview.platforms.winforms", 
+        "--include-module=webview.platforms.edgechromium",
+        
+        # ==========================================
+        # 6. ENTRY POINT
         # ==========================================
         "app.py"
     ]

@@ -13,10 +13,13 @@ log = get_enterprise_logger("DatabaseConfig")
 # ==========================================
 # 1. INITIALIZATION & LOCKS
 # ==========================================
+import contextlib
 db = SQLAlchemy()
-db_lock = threading.RLock()
-file_lock = threading.Lock()
-db_queue = queue.Queue(maxsize=1000)
+db_lock = contextlib.nullcontext()
+file_lock = contextlib.nullcontext()
+db_queue = queue.Queue()
+
+
 
 @event.listens_for(Engine, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):
@@ -31,14 +34,12 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
         cursor.execute("PRAGMA synchronous=NORMAL")     # Prevent disk thrashing
         cursor.execute("PRAGMA cache_size=-64000")      # ~64MB RAM cache
         
+        # 3. CONCURRENCY FIX: Wait up to 5 seconds if database is locked by another thread
+        cursor.execute("PRAGMA busy_timeout=5000")
+        
         cursor.close()
 
-class PipelineStatus(enum.Enum):
-    PENDING = "PENDING"
-    PROCESSING = "PROCESSING"
-    COMPLETED = "COMPLETED"
-    FAILED = "FAILED"
-    PAUSED = "PAUSED"
+from core.state_machine import PipelineStatus
 
 
 # ==========================================
@@ -68,7 +69,7 @@ class ModalityZipRule(db.Model):
         index=True
     )
     max_files_per_zip = db.Column(db.Integer, nullable=False, default=100)
-    last_updated = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_updated = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
     
     allowed_modality = db.relationship(
         'AllowedModality', 
@@ -93,7 +94,7 @@ class ModalityCompressionRule(db.Model):
     
     # 0 to 100 (Used for LOSSY quality limits)
     compression_level = db.Column(db.Integer, nullable=False, default=100) 
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
 
     # Isolated relationship back to the Allowed Modalities list
     allowed_modality = db.relationship(
@@ -175,10 +176,10 @@ class PatientStudy(db.Model):
     # Pipeline Metadata
     image_count = db.Column(db.Integer, default=0)
     uploaded_image_count = db.Column(db.Integer, default=0)
-    last_received = db.Column(db.DateTime, default=datetime.utcnow)
-    compression_status = db.Column(db.Enum(PipelineStatus), default=PipelineStatus.PENDING, nullable=False)
-    zip_status = db.Column(db.Enum(PipelineStatus), default=PipelineStatus.PENDING, nullable=False)
-    upload_status = db.Column(db.Enum(PipelineStatus), default=PipelineStatus.PENDING, nullable=False)
+    last_received = db.Column(db.DateTime, default=datetime.now)
+    compression_status = db.Column(db.Enum(PipelineStatus), default=PipelineStatus.PENDING, nullable=False, index=True)
+    zip_status = db.Column(db.Enum(PipelineStatus), default=PipelineStatus.PENDING, nullable=False, index=True)
+    upload_status = db.Column(db.Enum(PipelineStatus), default=PipelineStatus.PENDING, nullable=False, index=True)
     retry_count = db.Column(db.Integer, default=0, nullable=False)
     last_upload_attempt = db.Column(db.DateTime, nullable=True)
     remote_upload_id = db.Column(db.String(255), nullable=True)
@@ -254,7 +255,7 @@ class ImageInstance(db.Model):
     series_uid = db.Column(db.String, db.ForeignKey('series.series_uid', ondelete='CASCADE'), index=True, nullable=False)
     instance_number = db.Column(db.Integer)
     file_path = db.Column(db.String, nullable=False)
-    received_at = db.Column(db.DateTime, default=datetime.utcnow)
+    received_at = db.Column(db.DateTime, default=datetime.now)
     window_width = db.Column(db.String(100), nullable=True)
     window_center = db.Column(db.String(100), nullable=True)
     slice_thickness = db.Column(db.String(100), nullable=True)
@@ -301,7 +302,7 @@ class DescriptionMapping(db.Model):
 class AuditLog(db.Model):
     __tablename__ = 'audit_logs'
     id = db.Column(db.Integer, primary_key=True)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    timestamp = db.Column(db.DateTime, default=datetime.now, index=True)
     action_type = db.Column(db.String, index=True, nullable=False)
     study_uid = db.Column(db.String, index=True)
     sop_uid = db.Column(db.String)
@@ -328,9 +329,11 @@ class ReferringPhysician(db.Model):
 # 7. QUEUE UTILITIES
 # ==========================================
 def queue_study_update(payload: dict):
-    """Drops the DICOM data dictionary into the Inbox Basket."""
+    """Drops the DICOM data dictionary into the Inbox Basket via EventBus."""
+    from core.event_bus import db_write_queue, DBWriteEvent
     try:
-        db_queue.put(payload, timeout=2.0)
+        event = DBWriteEvent(action="insert_dicom", payload=payload)
+        db_write_queue.put(event, timeout=2.0)
         return True
     except queue.Full:
         log.warning("Queue is completely full, dropping database update")
@@ -347,10 +350,9 @@ def queue_study_update(payload: dict):
 def get_system_setting(key, default_value=""):
     """Safely fetches a setting from the database, falling back to a default if missing."""
     try:
-        with db_lock:
-            setting = SystemSetting.query.filter_by(key=key).first()
-            if setting and setting.value.strip():
-                return setting.value.strip()
+        setting = SystemSetting.query.filter_by(key=key).first()
+        if setting and setting.value.strip():
+            return setting.value.strip()
     except Exception:
         pass
     return default_value
