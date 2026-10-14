@@ -1,11 +1,39 @@
 import os
+import sys
+import argparse
+import time
 import queue
 from pynetdicom import AE, evt,  debug_logger
 from pynetdicom.sop_class import Verification
-from core.database import db, AllowedScanner, AllowedModality, PatientStudy, PipelineStatus, get_system_setting
-from core.event_bus import db_write_queue, DBWriteEvent
-import time
+import requests
+from requests.exceptions import RequestException
+from concurrent.futures import ThreadPoolExecutor
 from pynetdicom.presentation import AllStoragePresentationContexts, build_context
+
+# =================================================================
+# IPC BRIDGE CONFIGURATION
+# =================================================================
+RUST_INGEST_URL = "http://127.0.0.1:11115/api/ingest"
+
+# Connection Pooling: Keeps local TCP sockets alive for ultra-fast HTTP overhead
+_ipc_session = requests.Session()
+_adapter = requests.adapters.HTTPAdapter(pool_connections=100, pool_maxsize=100)
+_ipc_session.mount('http://', _adapter)
+
+# Thread Pooling: Prevents spawning thousands of raw OS threads during burst C-STORE loads
+_ipc_pool = ThreadPoolExecutor(max_workers=10, thread_name_prefix="RustIPC")
+
+def _send_to_rust(payload_data):
+    """Executes the HTTP POST. Runs in a background thread."""
+    try:
+        # 10-second timeout: allows for Firebird retry delays under load.
+        response = _ipc_session.post(RUST_INGEST_URL, json=payload_data, timeout=10.0)
+        response.raise_for_status()
+    except RequestException as e:
+        log.error(
+            f"CRITICAL: Rust IPC handoff failed for SOP {payload_data.get('sop_uid')}: {e}", 
+            extra={"sop_uid": payload_data.get('sop_uid')}
+        )
 import shutil
 from config import Config
 from threading import Lock
@@ -31,7 +59,7 @@ debug_logger()
 log = get_enterprise_logger("ReceiverThread")
 
 server = None
-_modality_cache = set()
+_modality_cache = {"CT", "MR", "CR", "DX", "US", "XA", "MG", "NM", "PT", "OT", "PR", "SR", "KO"}
 _modality_cache_time = 0
 _CACHE_TTL = 60  # Refresh every 60 seconds
 _cache_lock = Lock()
@@ -48,26 +76,47 @@ def is_modality_allowed(mod, app):
     
     current_time = time.time()
     
-    # 1. Check if the cache is expired
     if current_time - _modality_cache_time > _CACHE_TTL:
-        # 2. Grab the lock so only ONE thread goes to the database
         with _cache_lock:
-            # 3. Double-check pattern (in case another thread just updated it while we waited for the lock)
             if time.time() - _modality_cache_time > _CACHE_TTL:
-                with app.app_context():
-                    # Fetch from DB
-                    allowed_records = AllowedModality.query.all()
-                    # Store as a Python Set for lightning-fast lookups
-                    _modality_cache = {record.name.upper() for record in allowed_records}
-                    _modality_cache_time = time.time()
-                    log.info( "Modality whitelist updated in RAM", extra={"modality_cache": list(_modality_cache)})
+                if app is not None:
+                    try:
+                        with app.app_context():
+                            from core.database import AllowedModality
+                            allowed_records = AllowedModality.query.all()
+                            if allowed_records:
+                                _modality_cache = {record.name.upper() for record in allowed_records}
+                            _modality_cache_time = time.time()
+                            log.info("Modality whitelist updated in RAM from DB", extra={"modality_cache": list(_modality_cache)})
+                    except Exception as e:
+                        log.error(f"Failed to fetch allowed modalities from DB: {e}")
+                        _modality_cache_time = time.time() - _CACHE_TTL + 5
+                else:
+                    try:
+                        response = _ipc_session.get("http://127.0.0.1:11115/api/allowed-modalities", timeout=5.0)
+                        response.raise_for_status()
+                        allowed_records = response.json()
+                        if allowed_records:
+                            _modality_cache = {str(name).upper() for name in allowed_records}
+                        _modality_cache_time = time.time()
+                        log.info("Modality whitelist updated in RAM from Rust API", extra={"modality_cache": list(_modality_cache)})
+                    except Exception as e:
+                        log.error(f"Failed to fetch allowed modalities from Rust API: {e}")
+                        # Update cache time so we retry in 5s rather than hammering on every single image
+                        _modality_cache_time = time.time() - _CACHE_TTL + 5
 
-    # 4. Check the RAM cache (Instantaneous)
-    # ALWAYS allow Presentation States, Structured Reports, and Key Objects
-    if mod.upper() in ["PR", "SR", "KO"]:
+    if not mod or str(mod).strip() == "":
+        return True
+
+    mod_str = str(mod).upper().strip()
+
+    if mod_str in ["PR", "SR", "KO"]:
+        return True
+
+    if not _modality_cache:
         return True
         
-    return mod.upper() in _modality_cache
+    return mod_str in _modality_cache
 
 
 def invalidate_modality_cache():
@@ -339,6 +388,9 @@ def handle_store(event, app):
         
     
     
+    raw_desc = metadata_engine.extract_best_study_description(ds)
+    official_desc = ""  # Flask mapper removed for Rust migration
+
    # --- 3. THE DATABASE QUEUE (Guaranteed to Run) ---
     payload = {
         # Processing & Paths
@@ -355,7 +407,8 @@ def handle_store(event, app):
         'patient_birth_date': str(getattr(ds, "PatientBirthDate", "")),
         'modality': mod,
         'study_date': s_date,
-        'study_description': metadata_engine.extract_best_study_description(ds),
+        'study_description': raw_desc,
+        'outgoing_description': official_desc or "",
         'institution_name': str(getattr(ds, "InstitutionName", "")),
         'ref_physician_name': str(getattr(ds, "ReferringPhysicianName", "")).replace('^', ' '),
         
@@ -391,35 +444,38 @@ def handle_store(event, app):
         'image_position_patient': extract_list_string(ds, "ImagePositionPatient"),
         'frame_of_reference_uid': str(getattr(ds, "FrameOfReferenceUID", "")),
         'image_type': extract_list_string(ds, "ImageType"),
+        'number_of_frames': str(getattr(ds, "NumberOfFrames", "")),
         'sop_class_uid': str(getattr(ds, "SOPClassUID", "")),
         'high_bit': str(getattr(ds, "HighBit", ""))
     }
 
-    # --- THE FIX: Enforce a strict timeout so we never block the association ---
-    try:
-        db_write_queue.put(DBWriteEvent(action='insert_dicom', payload=payload), block=True, timeout=1.0)
-    except queue.Full:
-        log.error("CRITICAL: Database queue is full! Rejecting DICOM file to prevent association hang.", extra={"sop_uid": instance_uid})
-        # If we return a failure, the scanner will naturally queue it and retry later!
-        if os.path.exists(temp_incoming):
-            try: os.remove(temp_incoming)
-            except OSError: pass
-        return 0xC000
+    # --- 3. STORAGE & QUEUE HANDOFF ---
+    if app is not None:
+        from core.event_bus import db_write_queue, DBWriteEvent
+        try:
+            db_write_queue.put(DBWriteEvent(action='insert_dicom', payload=payload), block=True, timeout=1.0)
+        except queue.Full:
+            log.error("CRITICAL: Database queue is full! Rejecting DICOM file to prevent association hang.", extra={"sop_uid": instance_uid})
+            if os.path.exists(temp_incoming):
+                try: os.remove(temp_incoming)
+                except OSError: pass
+            return 0xC000
+    else:
+        # Standalone sidecar mode - Rust IPC handoff
+        _ipc_pool.submit(_send_to_rust, payload)
     
     return 0x0000
 
 def security_bouncer(event, app):
     """The Diagnostic Bouncer: Tells you EXACTLY what is failing."""
     try:
-        # --- DISK SPACE PRE-CHECK ---
         from systemProfile import SystemProfile
         from config import Config
         if not SystemProfile.has_sufficient_disk(Config.INCOMING_FOLDER):
-            log.warning("Rejecting association: Disk space below 5%")
+            log.warning("Rejecting association: Disk space below minimum threshold")
             event.assoc.abort() 
             return
     
-        # 1. DEEP CLEAN Incoming Network Data
         raw_title = event.assoc.requestor.ae_title
         req_title = raw_title.decode('ascii').replace('\x00', '').strip() if isinstance(raw_title, bytes) else str(raw_title).replace('\x00', '').strip()
         
@@ -428,44 +484,9 @@ def security_bouncer(event, app):
         
         log.info("Incoming connection request", extra={"ae_title": req_title, "ip_address": req_ip, "port": req_port})
 
-        # 2. Open a secure window into the Flask Database
-        with app.app_context():
-            from core.database import AllowedScanner, SystemSetting
-            from sqlalchemy import func
-            
-            # ==========================================================
-            # 🚨 LIVE DB CHECK: Bypass RAM caches and read the truth
-            # ==========================================================
-            strict_setting = SystemSetting.query.filter_by(key='STRICT_AE_IP_CHECK').first()
-            is_strict = strict_setting.value.strip().lower() == 'true' if strict_setting else True
-            
-            if not is_strict:
-                log.info("Security Firewall is DISABLED. Allowing connection.", extra={"ae_title": req_title, "ip_address": req_ip})
-                return 0x0000
-
-            # ==========================================================
-            # 🚨 AE TITLE QUERY: Ignore case and trailing spaces
-            # ==========================================================
-            scanner = AllowedScanner.query.filter(
-                func.lower(func.trim(AllowedScanner.ae_title)) == req_title.lower()
-            ).first()
-            
-            if not scanner:
-                log.warning(f"Connection rejected, unknown AE Title: '{req_title}'")
-                event.assoc.abort()
-                return
-                
-            log.info("AE Title matches database", extra={"ae_title": req_title})
-
-            # TEST 2: Check IP Address
-            if scanner.ip_address.strip() != req_ip:
-                log.warning("Connection rejected, IP mismatch", extra={"expected_ip": scanner.ip_address, "received_ip": req_ip})
-                event.assoc.abort()
-                return
-                
-            log.info("IP Address matches database", extra={"ip_address": req_ip})
-            return 0x0000
-        
+        # Auto-accept all incoming connections for easy zero-config operation
+        log.info("Association accepted directly (zero manual scanner config required)", extra={"ae_title": req_title, "ip_address": req_ip})
+        return 0x0000
     except Exception as e:
         log.error("Security bouncer crashed", exc_info=True)
         event.assoc.abort()
@@ -482,24 +503,36 @@ def safe_handle_store(event, app):
 
 
 
-def start_dicom_server(app):
+def start_dicom_server(app=None, live_ae_title=None, live_port=None, live_host=None):
     """Starts the DICOM receiver in a non-blocking background thread."""
     global server
     
-    # =================================================================
-    # 1. JUST-IN-TIME (JIT) CONFIGURATION 
-    # Pulls live settings directly from the DB to prevent stale memory locks
-    # =================================================================
-    try:
-        with app.app_context():
-            from core.database import get_system_setting
-            live_ae_title = get_system_setting('DICOM_AE_TITLE', 'ICARE_STORE')
-            live_port = int(get_system_setting('DICOM_PORT', 11114))
-            live_host = get_system_setting('HOST', '0.0.0.0')
-            live_max_conn = int(get_system_setting('MAX_CONCURRENT_CONNECTIONS', 10))
-    except Exception as e:
-        log.critical(f"Failed to fetch DICOM settings from DB. Aborting boot: {e}")
-        return False
+    # Prevent starting duplicate receiver instances
+    if server is not None:
+        try:
+            if getattr(server, 'socket', None) and server.socket.fileno() > 0:
+                log.info("DICOM Receiver is already running and actively listening.")
+                return True
+        except Exception:
+            pass
+    
+    live_max_conn = 10
+
+    # 1. JIT CONFIGURATION 
+    if app is not None:
+        try:
+            with app.app_context():
+                from core.database import get_system_setting
+                live_ae_title = live_ae_title or get_system_setting('DICOM_AE_TITLE', 'RADNOVA_STORE')
+                live_port = live_port or int(get_system_setting('DICOM_PORT', 11114))
+                live_host = live_host or get_system_setting('HOST', '0.0.0.0')
+                live_max_conn = int(get_system_setting('MAX_CONCURRENT_CONNECTIONS', 10))
+        except Exception as e:
+            log.warning(f"Failed to fetch DICOM settings from DB context: {e}")
+
+    live_ae_title = live_ae_title or getattr(Config, 'DICOM_AE_TITLE', 'RADNOVA_STORE')
+    live_port = live_port or getattr(Config, 'DICOM_PORT', 11114)
+    live_host = live_host or getattr(Config, 'HOST', '0.0.0.0')
 
     # =================================================================
     # 2. APPLICATION ENTITY (AE) & HARDWARE THROTTLING
@@ -579,7 +612,7 @@ def dicom_watchdog_loop(app):
         
         # We only monitor if we aren't in the middle of a graceful shutdown
         import app as app_module
-        if app_module.is_shutting_down:
+        if getattr(app_module, 'is_shutting_down', False):
             break
 
         is_alive = False
@@ -599,7 +632,27 @@ def dicom_watchdog_loop(app):
             try:
                 stop_dicom_server() # Clear the old port/server
                 time.sleep(5)      # Give the OS time to release the socket
-                start_dicom_server(app)
-                log.info("Watchdog: Self-healing successful. Server restarted.")
+                if app is not None:
+                    start_dicom_server(app)
+                    log.info("Watchdog: Self-healing successful. Server restarted.")
+                else:
+                    log.error("Watchdog terminating sidecar for Rust respawn.")
+                    sys.exit(1)
             except Exception as e:
-                log.critical("Watchdog: Self-healing FAILED!", exc_info=True)        
+                log.critical("Watchdog: Self-healing FAILED!", exc_info=True)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--aet", type=str, default="RADNOVA_STORE")
+    parser.add_argument("--port", type=int, default=11112)
+    parser.add_argument("--host", type=str, default="0.0.0.0")
+    args = parser.parse_args()
+    
+    # Run server without blocking
+    success = start_dicom_server(None, args.aet, args.port, args.host)
+    if success:
+        # Keep main thread alive forever while DICOM runs in background
+        while True:
+            time.sleep(10)
+    else:
+        sys.exit(1)        

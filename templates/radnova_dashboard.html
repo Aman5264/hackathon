@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Radnova — Medical Imaging & Gemma AI Gateway</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <style>
+        :root {
+            --rn-primary: #0284c7;
+            --rn-primary-hover: #0369a1;
+            --rn-dark: #0f172a;
+            --rn-card-bg: #1e293b;
+            --rn-border: #334155;
+            --rn-text-muted: #94a3b8;
+            --rn-accent: #38bdf8;
+            --rn-success: #10b981;
+            --rn-warning: #f59e0b;
+            --rn-danger: #ef4444;
+        }
+
+        body {
+            background-color: var(--rn-dark);
+            color: #f8fafc;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            min-height: 100vh;
+        }
+
+        .navbar-brand {
+            font-weight: 700;
+            font-size: 1.4rem;
+            letter-spacing: -0.02em;
+            color: #fff !important;
+        }
+
+        .navbar-brand span {
+            color: var(--rn-accent);
+        }
+
+        .header-badge {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid var(--rn-border);
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .pulse-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--rn-success);
+            box-shadow: 0 0 8px var(--rn-success);
+        }
+
+        .card-custom {
+            background-color: var(--rn-card-bg);
+            border: 1px solid var(--rn-border);
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+        }
+
+        .dropzone-box {
+            border: 2px dashed #475569;
+            border-radius: 12px;
+            background: rgba(15, 23, 42, 0.6);
+            padding: 35px 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .dropzone-box:hover, .dropzone-box.dragover {
+            border-color: var(--rn-accent);
+            background: rgba(56, 189, 248, 0.05);
+        }
+
+        .table-custom {
+            color: #f1f5f9;
+            margin-bottom: 0;
+            vertical-align: middle;
+        }
+
+        .table-custom th {
+            background: rgba(15, 23, 42, 0.8);
+            border-bottom: 1px solid var(--rn-border);
+            color: var(--rn-text-muted);
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            padding: 12px 14px;
+        }
+
+        .table-custom td {
+            border-bottom: 1px solid rgba(51, 65, 85, 0.6);
+            padding: 12px 14px;
+            font-size: 0.88rem;
+        }
+
+        .badge-step {
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .badge-completed { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+        .badge-skipped { background: rgba(56, 189, 248, 0.15); color: #7dd3fc; border: 1px solid rgba(56, 189, 248, 0.3); }
+        .badge-pending { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
+        .badge-processing { background: rgba(14, 165, 233, 0.15); color: #38bdf8; border: 1px solid rgba(14, 165, 233, 0.3); }
+        .badge-failed { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+
+        .modal-content-custom {
+            background: #0f172a;
+            border: 1px solid var(--rn-border);
+            color: #f8fafc;
+            border-radius: 14px;
+        }
+
+        .report-section-title {
+            color: var(--rn-accent);
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            font-weight: 700;
+            margin-top: 12px;
+            margin-bottom: 4px;
+        }
+
+        .disclaimer-banner {
+            background: rgba(245, 158, 11, 0.12);
+            border: 1px solid rgba(245, 158, 11, 0.4);
+            color: #fde68a;
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-size: 0.82rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Header & Nav -->
+    <nav class="navbar navbar-expand-lg border-bottom border-secondary-subtle px-3 py-2 mb-4" style="background:#090d16;">
+        <div class="container-fluid">
+            <a class="navbar-brand d-flex align-items-center gap-2" href="/">
+                <i class="bi bi-radioactive text-info fs-4"></i>
+                Radnova <span>MVP</span>
+            </a>
+            
+            <div class="d-flex align-items-center gap-2 flex-wrap">
+                <div class="header-badge">
+                    <div class="pulse-dot"></div>
+                    <span>DICOM Port: <strong>{{ dicom_port }}</strong></span>
+                    <span class="text-secondary">({{ dicom_aet }})</span>
+                </div>
+                <div class="header-badge">
+                    <i class="bi bi-cloud-arrow-up text-info"></i>
+                    <span>Remote: <strong>{{ "Configured" if tus_configured else "Local Mode" }}</strong></span>
+                </div>
+                <div class="header-badge">
+                    <i class="bi bi-robot text-warning"></i>
+                    <span>Gemma AI: <strong>{{ "Demo Findings" if gemma_demo else "API Connected" }}</strong></span>
+                </div>
+                <button class="btn btn-sm btn-outline-secondary ms-2" onclick="refreshStudies()">
+                    <i class="bi bi-arrow-clockwise"></i> Refresh
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid px-4">
+        <div class="row g-4">
+            
+            <!-- Upload Card -->
+            <div class="col-12">
+                <div class="card card-custom p-4">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h5 class="mb-0 fw-bold"><i class="bi bi-upload text-info me-2"></i>1. Receive DICOM Study</h5>
+                        <span class="text-secondary small">Supports .dcm files or entire folder drag-and-drop</span>
+                    </div>
+
+                    <div class="dropzone-box" id="dropzone" onclick="document.getElementById('fileInput').click()">
+                        <i class="bi bi-cloud-arrow-up-fill fs-1 text-info mb-2 d-block"></i>
+                        <h6 class="fw-bold mb-1">Drag and drop DICOM files here</h6>
+                        <p class="text-secondary small mb-3">or click to browse from your computer</p>
+                        <input type="file" id="fileInput" multiple style="display:none;" onchange="handleFileSelect(this.files)">
+                        <button type="button" class="btn btn-sm btn-info text-dark fw-bold px-3">
+                            <i class="bi bi-folder2-open me-1"></i> Browse Files
+                        </button>
+                    </div>
+
+                    <div id="uploadProgressContainer" class="mt-3" style="display:none;">
+                        <div class="d-flex justify-content-between text-secondary small mb-1">
+                            <span id="uploadStatusText">Uploading DICOM files...</span>
+                            <span id="uploadPercentText">0%</span>
+                        </div>
+                        <div class="progress" style="height: 8px;">
+                            <div id="uploadProgressBar" class="progress-bar bg-info progress-bar-striped progress-bar-animated" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Studies Table Card -->
+            <div class="col-12">
+                <div class="card card-custom p-4">
+                    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+                        <div>
+                            <h5 class="mb-0 fw-bold"><i class="bi bi-kanban text-info me-2"></i>Study Pipeline Status</h5>
+                            <span class="text-secondary small">Real-time status across Ingestion, Compression, ZIP, Gemma Report, and Upload</span>
+                        </div>
+                        <div class="d-flex align-items-center gap-2">
+                            <input type="text" id="searchInput" class="form-control form-control-sm bg-dark text-light border-secondary" placeholder="Search patient, modality, UID..." onkeyup="filterTable()">
+                        </div>
+                    </div>
+
+                    <div class="table-responsive">
+                        <table class="table table-custom table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Patient / Study</th>
+                                    <th>Modality</th>
+                                    <th>Images</th>
+                                    <th>2. Compression</th>
+                                    <th>3. ZIP Archive</th>
+                                    <th>4. Gemma Report</th>
+                                    <th>5. Remote Upload</th>
+                                    <th class="text-end">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="studiesTableBody">
+                                <tr>
+                                    <td colspan="8" class="text-center py-4 text-secondary">
+                                        <i class="bi bi-hourglass-split me-2"></i>Loading studies...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- Gemma Report Modal -->
+    <div class="modal fade" id="reportModal" tabindex="-1">
+        <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+            <div class="modal-content modal-content-custom">
+                <div class="modal-header border-secondary">
+                    <h5 class="modal-title d-flex align-items-center gap-2">
+                        <i class="bi bi-file-earmark-medical text-info"></i>
+                        <span>Radnova Gemma Draft Findings</span>
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <!-- Disclaimer -->
+                    <div class="disclaimer-banner mb-3">
+                        <i class="bi bi-exclamation-triangle-fill fs-5 text-warning flex-shrink-0"></i>
+                        <div>
+                            <strong>MANDATORY RADIOLOGIST REVIEW REQUIRED:</strong>
+                            <div class="small">This preliminary draft report was generated by Radnova AI for assistance purposes. It requires formal review, verification, and sign-off by a certified radiologist before diagnostic use.</div>
+                        </div>
+                    </div>
+
+                    <div class="p-3 bg-dark rounded border border-secondary mb-3">
+                        <div class="row g-2 small text-secondary">
+                            <div class="col-sm-6">Study UID: <span id="modalStudyUid" class="text-light fw-bold"></span></div>
+                            <div class="col-sm-6">Modality: <span id="modalModality" class="badge bg-info text-dark"></span></div>
+                            <div class="col-sm-6">Patient: <span id="modalPatientName" class="text-light"></span> (<span id="modalPatientId"></span>)</div>
+                            <div class="col-sm-6">Generated: <span id="modalGeneratedAt" class="text-light"></span></div>
+                        </div>
+                    </div>
+
+                    <div class="report-section-title"><i class="bi bi-gear-wide me-1"></i> Technique</div>
+                    <p id="modalTechnique" class="text-light mb-3"></p>
+
+                    <div class="report-section-title"><i class="bi bi-eye me-1"></i> Findings</div>
+                    <p id="modalFindings" class="text-light mb-3" style="line-height:1.6;"></p>
+
+                    <div class="report-section-title"><i class="bi bi-card-checklist me-1"></i> Impression</div>
+                    <div class="p-3 rounded bg-secondary bg-opacity-10 border border-secondary border-opacity-50 text-light fw-semibold mb-3" id="modalImpression"></div>
+
+                    <div class="report-section-title"><i class="bi bi-shield-exclamation me-1"></i> Limitations & Uncertainty</div>
+                    <p id="modalLimitations" class="text-secondary small mb-3"></p>
+
+                    <!-- Raw JSON Collapsible -->
+                    <div class="mt-4 pt-3 border-top border-secondary">
+                        <a class="text-info text-decoration-none small" data-bs-toggle="collapse" href="#rawJsonCollapse" role="button">
+                            <i class="bi bi-code-slash me-1"></i> View Raw Report JSON
+                        </a>
+                        <div class="collapse mt-2" id="rawJsonCollapse">
+                            <pre id="modalRawJson" class="p-3 bg-black rounded text-info small" style="max-height: 200px; overflow-y:auto;"></pre>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer border-secondary">
+                    <button type="button" class="btn btn-sm btn-outline-light" onclick="copyReportJson()"><i class="bi bi-clipboard me-1"></i> Copy JSON</button>
+                    <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let currentReportsMap = {};
+
+        // Drag and drop handlers
+        const dropzone = document.getElementById('dropzone');
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropzone.addEventListener(eventName, (e) => { e.preventDefault(); dropzone.classList.add('dragover'); }, false);
+        });
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropzone.addEventListener(eventName, (e) => { e.preventDefault(); dropzone.classList.remove('dragover'); }, false);
+        });
+        dropzone.addEventListener('drop', (e) => {
+            const dt = e.dataTransfer;
+            if (dt.files && dt.files.length > 0) {
+                handleFileSelect(dt.files);
+            }
+        });
+
+        function handleFileSelect(files) {
+            if (!files || files.length === 0) return;
+            uploadFiles(files);
+        }
+
+        function uploadFiles(files) {
+            const formData = new FormData();
+            let count = 0;
+            for (let i = 0; i < files.length; i++) {
+                formData.append('dicom_files', files[i]);
+                count++;
+            }
+
+            const pContainer = document.getElementById('uploadProgressContainer');
+            const pBar = document.getElementById('uploadProgressBar');
+            const pText = document.getElementById('uploadPercentText');
+            const sText = document.getElementById('uploadStatusText');
+
+            pContainer.style.display = 'block';
+            pBar.style.width = '0%';
+            pText.innerText = '0%';
+            sText.innerText = `Uploading ${count} file(s)...`;
+
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/upload', true);
+
+            xhr.upload.onprogress = function(e) {
+                if (e.lengthComputable) {
+                    const percent = Math.round((e.loaded / e.total) * 100);
+                    pBar.style.width = percent + '%';
+                    pText.innerText = percent + '%';
+                }
+            };
+
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    sText.innerText = `Successfully ingested ${count} file(s). Processing pipeline engaged.`;
+                    setTimeout(() => { pContainer.style.display = 'none'; }, 3000);
+                    refreshStudies();
+                } else {
+                    sText.innerText = `Upload warning: ${xhr.responseText || 'Files could not be processed'}`;
+                    setTimeout(() => { pContainer.style.display = 'none'; }, 5000);
+                    refreshStudies();
+                }
+            };
+
+            xhr.onerror = function() {
+                sText.innerText = 'Network error uploading files.';
+            };
+
+            xhr.send(formData);
+        }
+
+        function refreshStudies() {
+            fetch('/api/studies')
+                .then(res => res.json())
+                .then(data => {
+                    renderStudies(data.studies || []);
+                })
+                .catch(err => {
+                    console.error('Error fetching studies:', err);
+                });
+        }
+
+        function renderStudies(studies) {
+            const tbody = document.getElementById('studiesTableBody');
+            if (!studies || studies.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="8" class="text-center py-4 text-secondary">No DICOM studies received yet. Upload files above or send via DICOM C-STORE.</td></tr>';
+                return;
+            }
+
+            currentReportsMap = {};
+            let html = '';
+
+            studies.forEach(s => {
+                currentReportsMap[s.study_uid] = s.report || null;
+                const cleanUid = s.study_uid.length > 20 ? s.study_uid.substring(0, 10) + '...' + s.study_uid.slice(-6) : s.study_uid;
+                
+                // Compression badge
+                let compBadge = '<span class="badge-step badge-pending"><i class="bi bi-clock me-1"></i>Pending</span>';
+                if (s.compression_status === 'COMPLETED') {
+                    compBadge = '<span class="badge-step badge-completed"><i class="bi bi-check-circle me-1"></i>Lossless (+e1)</span>';
+                } else if (s.compression_status === 'SKIPPED') {
+                    compBadge = '<span class="badge-step badge-skipped"><i class="bi bi-info-circle me-1"></i>Original File</span>';
+                } else if (s.compression_status === 'PROCESSING') {
+                    compBadge = '<span class="badge-step badge-processing"><i class="bi bi-gear me-1"></i>Staging...</span>';
+                }
+
+                // ZIP badge
+                let zipBadge = '<span class="badge-step badge-pending">Pending</span>';
+                if (s.zip_status === 'COMPLETED' && s.archive_path) {
+                    const sizeKb = s.archive_size ? Math.round(s.archive_size / 1024) + ' KB' : 'Ready';
+                    zipBadge = `<a href="/api/studies/${s.study_uid}/download_zip" class="btn btn-sm btn-outline-info py-0 px-2 small text-decoration-none" title="Download ZIP Archive"><i class="bi bi-file-earmark-zip me-1"></i>${sizeKb}</a>`;
+                } else if (s.zip_status === 'PROCESSING') {
+                    zipBadge = '<span class="badge-step badge-processing"><i class="bi bi-hourglass-split me-1"></i>Packaging...</span>';
+                } else if (s.zip_status === 'FAILED') {
+                    zipBadge = '<span class="badge-step badge-failed">Failed</span>';
+                }
+
+                // Gemma Report badge
+                let reportBadge = '<span class="badge-step badge-pending">Pending</span>';
+                if (s.report && s.report.findings) {
+                    const label = s.report.is_synthetic_demo ? 'Demo Draft' : 'AI Draft';
+                    reportBadge = `<button class="btn btn-sm btn-outline-warning py-0 px-2 small" onclick="openReportModal('${s.study_uid}')"><i class="bi bi-file-text me-1"></i>${label}</button>`;
+                } else if (s.report_status === 'FAILED') {
+                    reportBadge = '<span class="badge-step badge-failed">Unavailable</span>';
+                }
+
+                // Remote Upload badge
+                let uploadBadge = '<span class="badge-step badge-pending">Pending</span>';
+                if (s.upload_status === 'COMPLETED') {
+                    uploadBadge = '<span class="badge-step badge-completed"><i class="bi bi-cloud-check me-1"></i>Uploaded</span>';
+                } else if (s.upload_status === 'PENDING') {
+                    uploadBadge = '<span class="badge-step badge-skipped"><i class="bi bi-hdd me-1"></i>Local Ready</span>';
+                } else if (s.upload_status === 'FAILED') {
+                    uploadBadge = `<button class="btn btn-sm btn-outline-danger py-0 px-2 small" onclick="retryStudy('${s.study_uid}')"><i class="bi bi-arrow-repeat me-1"></i>Retry</button>`;
+                }
+
+                html += `
+                <tr id="row-${s.study_uid}">
+                    <td>
+                        <div class="fw-bold">${s.patient_name || 'De-identified'}</div>
+                        <div class="text-secondary small">ID: ${s.patient_id || 'N/A'} • <span title="${s.study_uid}">${cleanUid}</span></div>
+                    </td>
+                    <td>
+                        <span class="badge bg-primary-subtle text-primary border border-primary-subtle">${s.modality || 'OT'}</span>
+                        <div class="text-secondary small text-truncate" style="max-width: 140px;">${s.study_description || ''}</div>
+                    </td>
+                    <td>
+                        <span class="fw-bold">${s.image_count || 0}</span>
+                    </td>
+                    <td>${compBadge}</td>
+                    <td>${zipBadge}</td>
+                    <td>${reportBadge}</td>
+                    <td>${uploadBadge}</td>
+                    <td class="text-end">
+                        <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="retryStudy('${s.study_uid}')" title="Reprocess study">
+                            <i class="bi bi-arrow-repeat"></i>
+                        </button>
+                    </td>
+                </tr>`;
+            });
+
+            tbody.innerHTML = html;
+        }
+
+        function openReportModal(studyUid) {
+            const report = currentReportsMap[studyUid];
+            if (!report) return;
+
+            document.getElementById('modalStudyUid').innerText = report.study_uid || studyUid;
+            document.getElementById('modalModality').innerText = report.modality || 'DICOM';
+            document.getElementById('modalPatientName').innerText = (report.patient_context && report.patient_context.patient_name) || 'De-identified';
+            document.getElementById('modalPatientId').innerText = (report.patient_context && report.patient_context.patient_id) || 'N/A';
+            document.getElementById('modalGeneratedAt').innerText = report.generated_at ? new Date(report.generated_at).toLocaleString() : 'Just now';
+            
+            document.getElementById('modalTechnique').innerText = report.technique || 'Standard evaluation.';
+            document.getElementById('modalFindings').innerText = report.findings || 'No findings recorded.';
+            document.getElementById('modalImpression').innerText = report.impression || 'Preliminary draft impression pending review.';
+            document.getElementById('modalLimitations').innerText = report.limitations_and_uncertainty || 'None specified.';
+            document.getElementById('modalRawJson').innerText = JSON.stringify(report, null, 2);
+
+            const modal = new bootstrap.Modal(document.getElementById('reportModal'));
+            modal.show();
+        }
+
+        function copyReportJson() {
+            const jsonText = document.getElementById('modalRawJson').innerText;
+            navigator.clipboard.writeText(jsonText).then(() => {
+                alert('Report JSON copied to clipboard!');
+            });
+        }
+
+        function retryStudy(studyUid) {
+            fetch(`/api/patients/${studyUid}/retry_upload`, { method: 'POST' })
+                .then(res => res.json())
+                .then(d => {
+                    refreshStudies();
+                });
+        }
+
+        function filterTable() {
+            const query = document.getElementById('searchInput').value.toLowerCase();
+            const rows = document.querySelectorAll('#studiesTableBody tr');
+            rows.forEach(r => {
+                r.style.display = r.innerText.toLowerCase().includes(query) ? '' : 'none';
+            });
+        }
+
+        // Initialize and auto-poll every 2 seconds
+        refreshStudies();
+        setInterval(refreshStudies, 2000);
+    </script>
+</body>
+</html>

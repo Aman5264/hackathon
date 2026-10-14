@@ -71,48 +71,12 @@ import requests # Make sure this is imported at the top of app.py!
 
 def authenticate_gateway_on_boot(app):
     """
-    Runs during application startup (or when credentials are changed). 
-    Validates them against the central server and saves the state to app.config.
+    Hackathon Mode: Bypasses external machine-to-machine authentication.
+    Immediately marks the gateway as authenticated and ready.
     """
-    with app.app_context():
-        from core.database import get_system_setting
-        db_user = SystemSetting.query.filter_by(key='gateway_username').first()
-        db_pass = SystemSetting.query.filter_by(key='gateway_password').first()
-        auth_url = get_system_setting('AUTH_API_URL', 'https://fallback-url.com')
-
-        if not db_user or not db_pass or not db_user.value or not db_pass.value:
-            log.warning("⚠️ Gateway credentials missing or incomplete. Booting into Setup Mode.")
-            app.config['AUTH_STATUS'] = "NEEDS_SETUP"  # <-- Save state
-            return "NEEDS_SETUP"
-
-        username = db_user.value
-        password = db_pass.value
-        headers = {"username": username, "password": password}
-
-        log.info(f"Initiating Machine-to-Machine Auth for gateway: {username}...")
-
-        try:
-            response = requests.post(auth_url, headers=headers, timeout=15,  verify=False )
-            
-            try:
-                response_data = response.json()
-            except ValueError:
-                response_data = {}
-
-            if response.status_code == 200 and response_data.get("success") is True:
-                log.info("✅ Gateway successfully authenticated with Central Server.")
-                app.config['AUTH_STATUS'] = True  # <-- Save state
-                return True
-            else:
-                api_error = response_data.get("errorMessage", response_data.get("message", "Unknown API Rejection"))
-                log.critical(f"❌ BOOT HALTED: Central Server rejected credentials. Reason: {api_error}")
-                app.config['AUTH_STATUS'] = False # <-- Save state
-                return False
-
-        except requests.exceptions.RequestException as e:
-            log.critical(f"❌ BOOT HALTED: Cannot reach Central Server. Error: {e}")
-            app.config['AUTH_STATUS'] = False     # <-- Save state
-            return False
+    app.config['AUTH_STATUS'] = True
+    log.info("✅ Startup auth bypassed: Direct Gateway Operation Active.")
+    return True
 
 # ==========================================
 # 1. THE SETUP & NETWORK LOCK (Global Bouncer)
@@ -120,41 +84,10 @@ def authenticate_gateway_on_boot(app):
 @app.before_request
 def enforce_setup():
     """
-    Ensures NO ONE can access the main dashboard until linked AND online.
-    Allows Admin access to configure the system.
+    Setup & authentication checks bypassed for streamlined hackathon operation.
+    Direct access to dashboard without login or remote server configuration.
     """
-    # 1. Whitelist ALL admin and setup endpoints
-    allowed_routes = [
-        'initial_setup', 
-        'static', 
-        'admin_login', 
-        'unified_admin', 
-        'settings',
-        'zip_rules',       
-        'add_mapping',     
-        'manage_centers',
-        'delete_mapping', 
-        'admin_logout',    
-        'logout',
-        'authenticate_gateway',                     # <-- ADDED SO YOU CAN LOG OUT OF MAIN DASHBOARD
-        'shutdown'                                  # <-- WHITELIST SHUTDOWN TO PREVENT FREEZING
-    ]
-    
-    # If the user is trying to access a whitelisted admin/setup page, let them through
-    if request.endpoint in allowed_routes:
-        return
-
-    # 2. Check the Global Auth Status we saved during boot
-    auth_status = app.config.get('AUTH_STATUS')
-
-    # 3. ROUTE 2 LOGIC: No credentials exist yet
-    if auth_status == "NEEDS_SETUP":
-        return redirect(url_for('initial_setup'))
-        
-    # 4. ROUTE 3 LOGIC: Credentials exist, but they failed (or network is dead)
-    if auth_status is False:
-        flash("⚠️ Gateway is offline or credentials failed. Dashboard locked. Please fix the API Connection.", "error")
-        return redirect('/admin')
+    return None
     
   #----------------------------------------------------------------===========
     
@@ -197,10 +130,8 @@ def admin_logout():
 # ==========================================
 @app.route('/admin', methods=['GET'])
 def unified_admin():
-    """Fetches ALL data for the master tabbed interface."""
-    # 1. Bounce them if they don't have the admin wristband
-    if not session.get('admin_auth'):
-        return redirect('/admin-login')
+    """Fetches ALL data for the master tabbed interface (Admin auth check bypassed)."""
+    session['admin_auth'] = True
 
     # 2. Check Cloud Link Status (Requires BOTH username and password)
     gateway_user = SystemSetting.query.filter_by(key='gateway_username').first()
@@ -955,14 +886,20 @@ def settings():
             log.info("Attempting to acquire db_lock...")
             with db_lock:
                 log.info("Lock acquired! Updating settings...")
+                url_keys = {'AUTH_API_URL', 'CREATE_STUDY_API_URL', 'UPDATE_STUDY_API_URL', 'DESCRIPTION_API_URL', 'TUS_API_URL'}
                 for key in keys_to_update:
                     val = request.form.get(key)
                     if val is not None:
+                        val_clean = val.strip()
+                        # If it's a URL field, ensure it has a valid scheme or ignore random junk like 'ggg'
+                        if key in url_keys and val_clean and not val_clean.startswith(('http://', 'https://')):
+                            log.warning(f"Ignored invalid URL for {key}: '{val_clean}'")
+                            continue
                         setting = SystemSetting.query.filter_by(key=key).first()
                         if not setting:
                             setting = SystemSetting(key=key)
                             db.session.add(setting)
-                        setting.value = val.strip()
+                        setting.value = val_clean
                 
                 log.info("Committing changes...")
                 db.session.commit()
@@ -1487,7 +1424,7 @@ def enforce_single_instance():
     this function forces the new instance to silently exit.
     """
     # A unique string identifier for your specific application
-    mutex_name = "Global\\IcareEnterpriseDicomGateway_Mutex"
+    mutex_name = "Global\\RadnovaEnterpriseDicomGateway_Mutex"
     
     # Ask Windows to create or find this Mutex
     mutex = ctypes.windll.kernel32.CreateMutexW(None, False, mutex_name)
@@ -1711,16 +1648,8 @@ if __name__ == '__main__':
     os.makedirs(Config.INCOMING_FOLDER, exist_ok=True)
     os.makedirs(Config.BACKUP_FOLDER, exist_ok=True)
 
-    log.info("Verifying Gateway Identity...")
-    auth_status = authenticate_gateway_on_boot(app)
-    
-    if auth_status is True:
-        log.info("✅ Auth successful. Proceeding to pipeline boot...")
-        start_enterprise_pipeline(app) 
-    elif auth_status == "NEEDS_SETUP":
-        log.warning("⚙️ SETUP MODE ACTIVE: Background processors and DICOM Server are PAUSED.")
-    else:
-        log.critical("❌ AUTH FAILURE: The Central Server rejected the credentials.")
+    log.info("🚀 Starting Radnova Direct Pipeline (Zero Manual Setup Required)...")
+    start_enterprise_pipeline(app)
 
     # Apply priority safeguards
     enable_legacy_safeguards()
@@ -1755,7 +1684,7 @@ if __name__ == '__main__':
 
     # Create UI Window
     window = webview.create_window(
-        "Powered BY Icare Infosystem Pvt. Ltd.",
+        "Powered BY Radnova.",
        f"http://127.0.0.1:{LIVE_UI_PORT}",
         width=1400,
         height=900,

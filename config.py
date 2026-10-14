@@ -20,7 +20,7 @@ class Config:
     MAX_CONNECTIONS = int(get_system_setting('MAX_CONCURRENT_CONNECTIONS', 10))
     BACKUP_FOLDER =  os.environ.get('BACKUP_FOLDER', 'data/backup')
     SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URI', 'sqlite:///dicom_data.db')
-    DICOM_AE_TITLE =  get_system_setting('DICOM_AE_TITLE', 'ICARE_STORE')
+    DICOM_AE_TITLE =  get_system_setting('DICOM_AE_TITLE', 'RADNOVA_STORE')
     HOST =  get_system_setting('HOST', '0.0.0.0')
     RETENTION_DAYS = int(os.environ.get('RETENTION_DAYS', 30))
     MIN_DISK_FREE_PERCENT = 5.0

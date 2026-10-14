@@ -4,6 +4,7 @@ class PipelineStatus(enum.Enum):
     PENDING = "PENDING"
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
+    SKIPPED = "SKIPPED"
     FAILED = "FAILED"
     PAUSED = "PAUSED"
 

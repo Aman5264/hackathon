@@ -147,10 +147,13 @@ def send_study_to_api(study_uid: str, is_update: bool = False) -> bool:
     
     headers = {"Content-Type": "application/json", "Connection": "close"}
     from core.database import get_system_setting
-    API_URL = get_system_setting('CREATE_STUDY_API_URL', 'https://icare.anikrafoundation.com:8443/weasisintegratorwf/studymasterservice/createStudy')
+    API_URL = get_system_setting('CREATE_STUDY_API_URL', 'http://127.0.0.1:5005/api/create_study')
+    if not API_URL or not API_URL.strip().startswith(('http://', 'https://')):
+        log.warning(f"Skipping API sync: CREATE_STUDY_API_URL is unconfigured or invalid ('{API_URL}')")
+        return False
     
     try:
-        response = requests.post(API_URL, json=payload, headers=headers, timeout=60, verify=False)
+        response = requests.post(API_URL.strip(), json=payload, headers=headers, timeout=10, verify=False)
         if response.status_code in (200, 201):
             response_data = response.json()
             if response_data.get("success", False):
@@ -173,6 +176,9 @@ def send_study_to_api(study_uid: str, is_update: bool = False) -> bool:
 def sync_upload_count(study_uid: str, uploaded_count: int, total_count: int):
     from core.database import get_system_setting
     study = PatientStudy.query.filter_by(study_uid=study_uid).first()
+    if not study:
+        return False
+
     entity = {
         "studyInstanceUID": study_uid,
         "imageUploaded": uploaded_count,
@@ -180,9 +186,12 @@ def sync_upload_count(study_uid: str, uploaded_count: int, total_count: int):
         "institutionName": study.institution_name or "",
         "uploadingStatus": 1 if uploaded_count >= total_count else 0
     }
-    API_URL = get_system_setting('CREATE_STUDY_API_URL', 'https://icare.anikrafoundation.com:8443/weasisintegratorwf/studymasterservice/createStudy')
+    API_URL = get_system_setting('CREATE_STUDY_API_URL', 'http://127.0.0.1:5005/api/create_study')
+    if not API_URL or not API_URL.strip().startswith(('http://', 'https://')):
+        return False
+
     try:
-        requests.post(API_URL, json={"studyRequestEntity": entity}, headers={"Content-Type": "application/json"}, timeout=5, verify=False)
+        requests.post(API_URL.strip(), json={"studyRequestEntity": entity}, headers={"Content-Type": "application/json"}, timeout=5, verify=False)
         return True
     except Exception as e:
         log.error(f"Failed to sync count: {e}")

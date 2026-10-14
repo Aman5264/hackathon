@@ -1,0 +1,20 @@
+{
+  "study_uid": "1.3.6.1.4.1.5962.1.2.1.20040119072730.12322",
+  "modality": "CT",
+  "patient_context": {
+    "patient_id": "1CT1",
+    "patient_name": "CompressedSamples CT1",
+    "age": "000Y",
+    "sex": "O"
+  },
+  "technique": "Axial computed tomography (CT) slices evaluated for e+1. Acquired frames: 1.",
+  "findings": "Cross-sectional examination demonstrates symmetric anatomical landmarks. No mass effect, midline shift, abnormal fluid collections, or acute territorial infarctions visualized. Visualized osseous structures demonstrate intact cortical architecture without aggressive lytic or blastic lesions.",
+  "impression": "Unremarkable preliminary CT evaluation without acute gross abnormality. Correlate with clinical indications.",
+  "limitations_and_uncertainty": "Automated draft report generated in Radnova Demo Mode without pixel-level computer-vision verification. Assessment is bounded by available study tags (Modality: CT, Description: e+1, Count: 1). Clinical history and prior comparative studies were not integrated.",
+  "report_status": "DRAFT",
+  "is_synthetic_demo": true,
+  "model": "Gemma-2-9B-IT (Synthetic Draft Mode)",
+  "requires_radiologist_review": true,
+  "mandatory_disclaimer": "AI PRELIMINARY DRAFT REPORT \u2014 REQUIRES MANDATORY RADIOLOGIST REVIEW AND SIGN-OFF. NOT FOR INDEPENDENT DIAGNOSIS.",
+  "generated_at": "2026-10-14T13:41:22.459759"
+}

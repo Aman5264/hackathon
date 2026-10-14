@@ -730,14 +730,14 @@
                         <div>
                             <label>Create Study API URL (api_client.py):</label>
                             <input type="text" name="CREATE_STUDY_API_URL"
-                                value="{{ safe_settings.get('CREATE_STUDY_API_URL', 'https://icare.anikrafoundation.com:8443/weasisintegratorwf/studymasterservice/createStudy') }}"
+                                value="{{ safe_settings.get('CREATE_STUDY_API_URL', 'http://127.0.0.1:5005/api/create_study') }}"
                                 required>
                         </div>
 
                         <div>
                             <label>Update Study API URL (push_updates):</label>
                             <input type="text" name="UPDATE_STUDY_API_URL"
-                                value="{{ safe_settings.get('UPDATE_STUDY_API_URL', 'https://icare.anikrafoundation.com:8443/weasisintegratorwf/studymasterservice/updateStudy/') }}"
+                                value="{{ safe_settings.get('UPDATE_STUDY_API_URL', 'http://127.0.0.1:5005/api/update_study/') }}"
                                 required>
                         </div>
 
@@ -812,7 +812,7 @@
                         <div>
                             <label>AE TITLE </label>
                             <input type="text" name="DICOM_AE_TITLE"
-                                value="{{ safe_settings.get('DICOM_AE_TITLE', 'ICARE_STORE') }}" required>
+                                value="{{ safe_settings.get('DICOM_AE_TITLE', 'RADNOVA_STORE') }}" required>
                         </div>
 
                         <div>
